@@ -1,0 +1,11 @@
+set -x
+
+# 128 functions, with duplicated sys_select and several invalid
+sudo insmod ./profiler.ko funcs=sys_exit,sys_fork,sys_read,sys_write,sys_open,sys_close,sys_waitpid,sys_creat,sys_link,sys_unlink,sys_execve,sys_chdir,sys_time,sys_mknod,sys_chmod,sys_lchown,sys_stat,sys_lseek,sys_getpid,sys_mount,sys_oldumount,sys_setuid,sys_getuid,sys_stime,sys_ptrace,sys_alarm,sys_fstat,sys_pause,sys_utime,sys_access,sys_nice,sys_sync,sys_kill,sys_rename,sys_mkdir,sys_rmdir,sys_dup,sys_pipe,sys_times,sys_brk,sys_setgid,sys_getgid,sys_signal,sys_geteuid,sys_getegid,sys_acct,sys_umount,sys_ioctl,sys_fcntl,sys_setpgid,sys_olduname,sys_umask,sys_chroot,sys_ustat,sys_dup2,sys_getppid,sys_getpgrp,sys_setsid,sys_sigaction,sys_sgetmask,sys_ssetmask,sys_setreuid,sys_setregid,sys_sigsuspend,sys_sigpending,sys_sethostname,sys_setrlimit,sys_getrlimit,sys_getrusage,sys_gettimeofday,sys_settimeofday,sys_getgroups,sys_setgroups,old_select,sys_symlink,sys_lstat,sys_readlink,sys_uselib,sys_swapon,sys_reboot,old_readdir,old_mmap,sys_munmap,sys_truncate,sys_ftruncate,sys_fchmod,sys_fchown,sys_getpriority,sys_setpriority,sys_statfs,sys_fstatfs,sys_ioperm,sys_socketcall,sys_syslog,sys_setitimer,sys_getitimer,sys_newstat,sys_newlstat,sys_newfstat,sys_uname,sys_iopl,sys_vhangup,sys_idle,sys_vm86old,sys_wait4,sys_swapoff,sys_sysinfo,sys_ipc,sys_fsync,sys_sigreturn,sys_clone,sys_setdomainname,sys_newuname,sys_modify_ldt,sys_adjtimex,sys_mprotect,sys_sigprocmask,sys_create_module,sys_init_module,sys_delete_module,sys_get_kernel_syms,sys_quotactl,sys_getpgid,sys_fchdir,sys_bdflush,sys_llseek,sys_select,sys_select
+
+sleep 3
+
+cat /sys/class/kprobesys/profiler/stat
+
+sudo rmmod profiler
+

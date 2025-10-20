@@ -1,0 +1,1944 @@
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/arch/arm/mm/consistent.c linux.noL2.hp2/arch/arm/mm/consistent.c
+--- linux.noL2/arch/arm/mm/consistent.c	2006-05-30 10:24:11.000000000 +0800
++++ linux.noL2.hp2/arch/arm/mm/consistent.c	2006-06-16 09:00:32.000000000 +0800
+@@ -75,6 +75,52 @@
+ };
+ 
+ static struct vm_region *
++vm_region_alloc_huge(struct vm_region *head, size_t size, int gfp)
++{
++	unsigned long addr, end;
++	unsigned long flags;
++	struct vm_region *c, *new;
++
++	size = HUGE_PAGE_ALIGN(size);
++	addr = HUGE_PAGE_ALIGN(head->vm_start);
++	end = head->vm_end - size;
++ 
++	new = kmalloc(sizeof(struct vm_region), gfp);
++	if (!new)
++		goto out;
++
++	spin_lock_irqsave(&consistent_lock, flags);
++
++	list_for_each_entry(c, &head->vm_list, vm_list) {
++		if ((addr + size) < addr)
++			goto nospc;
++		if ((addr + size) <= c->vm_start)
++			goto found;
++		addr = HUGE_PAGE_ALIGN(c->vm_end);
++		if (addr > end)
++			goto nospc;
++	}
++
++ found:
++	/*
++	 * Insert this entry _before_ the one we found.
++	 */
++	list_add_tail(&new->vm_list, &c->vm_list);
++	new->vm_start = addr;
++	new->vm_end = addr + size;
++	HUGE_PAGE_DEBUG_EX(("vm_region_alloc_huge: 0x%08x -> 0x%08x\n", addr, addr+size))
++
++	spin_unlock_irqrestore(&consistent_lock, flags);
++	return new;
++
++ nospc:
++	spin_unlock_irqrestore(&consistent_lock, flags);
++	kfree(new);
++ out:
++	return NULL;
++}
++
++static struct vm_region *
+ vm_region_alloc(struct vm_region *head, size_t size, int gfp)
+ {
+ 	unsigned long addr = head->vm_start, end = head->vm_end - size;
+@@ -247,6 +293,182 @@
+ }
+ 
+ /*
++ * Similar with __dma_alloc.
++ * These functions ensure the (*handle) of dma to be HUGE_PAGE_ALIGN'ed.
++ * The "size" is better to be HUGE_PAGE_ALIGN'ed if enabling the flag of
++ * L_PTE_HUGE when calling set_pte() , or the UNUSED virtual memory block 
++ * should NOT be used any longer (to avoid potential security issues)!
++ */
++static void *
++__dma_alloc_huge(struct device *dev, size_t size, dma_addr_t *handle, int gfp,
++	    pgprot_t prot)
++{
++	struct page *page, *end, *free, *aligned_page;
++	unsigned long order, size2;
++	dma_addr_t dma_addr, aligned_dma;
++	unsigned long aligned_off;
++	struct vm_region *c;
++	u64 mask = ISA_DMA_THRESHOLD, limit;
++
++	if (!consistent_pte) {
++		printk(KERN_ERR "%s: not initialised\n", __func__);
++		dump_stack();
++		return NULL;
++	}
++
++	if (dev) {
++		mask = dev->coherent_dma_mask;
++
++		/*
++		 * Sanity check the DMA mask - it must be non-zero, and
++		 * must be able to be satisfied by a DMA allocation.
++		 */
++		if (mask == 0) {
++			dev_warn(dev, "coherent DMA mask is unset\n");
++			goto no_page;
++		}
++
++		if ((~mask) & ISA_DMA_THRESHOLD) {
++			dev_warn(dev, "coherent DMA mask %#llx is smaller "
++				 "than system GFP_DMA mask %#llx\n",
++				 mask, (unsigned long long)ISA_DMA_THRESHOLD);
++			goto no_page;
++		}
++	}
++
++	/*
++	 * Sanity check the allocation size.
++	 */
++	size = PAGE_ALIGN(size);
++	limit = (mask + 1) & ~mask;
++	if ((limit && size >= limit) ||
++	    size >= (CONSISTENT_END - CONSISTENT_BASE)) {
++		printk(KERN_WARNING "coherent allocation too big "
++		       "(requested %#x mask %#llx)\n", size, mask);
++		goto no_page;
++	}
++
++	order = get_order(size);
++
++	if (mask != 0xffffffff)
++		gfp |= GFP_DMA;
++
++	page = alloc_pages(gfp, order);
++	if (!page)
++		goto no_page;
++
++	dma_addr = page_to_dma(dev, page);
++
++	if (dma_addr & ~HUGE_PAGE_MASK) {	// realloc memory
++		__free_pages(page, order);
++		/* Allocate aditional 64KB memory, in order 
++		 * to align memory to 64KB boundary. 
++		 * Unused pages will be freed */
++		size2 = size + HUGE_PAGE_SIZE;
++		order = get_order(size2);
++
++		page = alloc_pages(gfp, order);
++		if (!page)
++			goto no_page;
++
++		dma_addr = page_to_dma(dev, page);
++
++		aligned_dma = HUGE_PAGE_ALIGN(dma_addr);
++		aligned_off = aligned_dma - dma_addr;
++
++		/* Get the HUGE_PAGE_ALIGN'ed page */
++		aligned_page = virt_to_page(__bus_to_virt(dma_addr + aligned_off)); 
++	}
++	else {
++		aligned_page = page;
++		aligned_dma = dma_addr;
++	}
++	
++	/*
++	 * Invalidate any data that might be lurking in the
++	 * kernel direct-mapped region for device DMA.
++	 */
++	{
++		unsigned long kaddr = (unsigned long)page_address(aligned_page);
++		memset(page_address(aligned_page), 0, size);
++		dmac_flush_range(kaddr, kaddr + size);
++	}
++
++	/*
++	 * Allocate a virtual address in the consistent mapping region.
++	 */
++	c = vm_region_alloc_huge(&consistent_head, size,
++			    gfp & ~(__GFP_DMA | __GFP_HIGHMEM));
++	HUGE_PAGE_DEBUG_EX(("vm_region_alloc_huge return: 0x%08x -> 0x%08x\n", 
++		c->vm_start, c->vm_end))
++	if (c) {
++		pte_t *pte = consistent_pte + CONSISTENT_OFFSET(c->vm_start);
++
++		c->vm_pages = aligned_page;
++
++		/*
++		 * Set the "dma handle"
++		 */
++		*handle = aligned_dma;
++
++		/* Free unused 64KB pages, 2 parts in total */
++		free = aligned_page + (size >> PAGE_SHIFT);
++		end  = page + (1 << order);
++		while(page < aligned_page) {
++			set_page_count(page, 1);
++			__free_page(page);
++			page++;
++		}
++		while(page < free) {
++			BUG_ON(!pte_none(*pte));
++			
++			set_page_count(page, 1);
++			SetPageReserved(page);
++			set_pte(pte, pte_mkhuge(mk_pte(page, prot)));
++			page++;
++			pte++;
++		}	
++		while(page < end) {
++			set_page_count(page, 1);
++			__free_page(page);
++			page++;
++		}
++
++		HUGE_PAGE_DEBUG_EX(("allocate huge page: 0x%08x\n", aligned_page))
++		return (void *)c->vm_start;
++	}
++
++	if (page)
++		__free_pages(page, order);
++ no_page:
++	*handle = ~0;
++	return NULL;
++}
++
++/*
++ * Similar with dma_alloc_coherent() & dma_alloc_writecombine().
++ * These functions ensure the (*handle) of dma to be HUGE_PAGE_ALIGN'ed.
++ * The "size" is better to be HUGE_PAGE_ALIGN'ed if enabling the flag of
++ * L_PTE_HUGE when calling set_pte() , or the UNUSED virtual memory block 
++ * should NOT be used any longer (to avoid potential security issues)!
++ */
++void *
++dma_alloc_huge_coherent(struct device *dev, size_t size, dma_addr_t *handle, int gfp)
++{
++	return __dma_alloc_huge(dev, size, handle, gfp,
++			   pgprot_noncached(pgprot_kernel));
++}
++EXPORT_SYMBOL(dma_alloc_huge_coherent);
++
++void *
++dma_alloc_huge_writecombine(struct device *dev, size_t size, dma_addr_t *handle, int gfp)
++{
++	return __dma_alloc_huge(dev, size, handle, gfp,
++			   pgprot_writecombine(pgprot_kernel));
++}
++EXPORT_SYMBOL(dma_alloc_huge_writecombine);
++
++/*
+  * Allocate DMA-coherent memory space and return both the kernel remapped
+  * virtual and bus address for that space.
+  */
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/arch/arm/mm/mmap.c linux.noL2.hp2/arch/arm/mm/mmap.c
+--- linux.noL2/arch/arm/mm/mmap.c	2006-05-30 10:24:11.000000000 +0800
++++ linux.noL2.hp2/arch/arm/mm/mmap.c	2006-06-16 19:45:22.828802616 +0800
+@@ -9,6 +9,58 @@
+ 
+ #include <asm/system.h>
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++unsigned long
++arch_get_unmapped_huge_area(struct file *filp, unsigned long addr,
++		unsigned long len, unsigned long pgoff, unsigned long flags)
++{
++	struct mm_struct *mm = current->mm;
++	struct vm_area_struct *vma;
++	unsigned long start_addr;
++	
++	len = HUGE_PAGE_ALIGN(len);
++
++	if (len > TASK_SIZE)
++		return -ENOMEM;
++
++	if (addr) {
++		addr = HUGE_PAGE_ALIGN(addr);
++
++		vma = find_vma(mm, addr);
++		if (TASK_SIZE - len >= addr &&
++		    (!vma || addr + len <= vma->vm_start))
++			return addr;
++	}
++	start_addr = addr = mm->free_area_cache;
++
++full_search:
++	addr = HUGE_PAGE_ALIGN(addr);
++
++	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
++		/* At this point:  (!vma || addr < vma->vm_end). */
++		if (TASK_SIZE - len < addr) {
++			/*
++			 * Start a new search - just in case we missed
++			 * some holes.
++			 */
++			if (start_addr != TASK_UNMAPPED_BASE) {
++				start_addr = addr = TASK_UNMAPPED_BASE;
++				goto full_search;
++			}
++			return -ENOMEM;
++		}
++		if (!vma || addr + len <= vma->vm_start) {
++			/*
++			 * Remember the place where we stopped the search:
++			 */
++			mm->free_area_cache = addr + len;
++			return addr;
++		}
++		addr = HUGE_PAGE_ALIGN(vma->vm_end);
++	}
++}
++#endif
++
+ #define COLOUR_ALIGN(addr,pgoff)		\
+ 	((((addr)+SHMLBA-1)&~(SHMLBA-1)) +	\
+ 	 (((pgoff)<<PAGE_SHIFT) & (SHMLBA-1)))
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/arch/arm/mm/proc-xscale.S linux.noL2.hp2/arch/arm/mm/proc-xscale.S
+--- linux.noL2/arch/arm/mm/proc-xscale.S	2006-05-30 10:26:02.000000000 +0800
++++ linux.noL2.hp2/arch/arm/mm/proc-xscale.S	2006-06-16 19:08:33.660647224 +0800
+@@ -826,6 +826,8 @@
+  */
+ 	.align	5
+ ENTRY(cpu_xscale_set_pte)
++	stmfd	sp!, {r0 - r4, ip, lr}
++
+ 	str	r1, [r0], #-2048		@ linux version
+ 
+ 	bic	r2, r1, #0xff0
+@@ -898,12 +900,31 @@
+ 	movne	r2, #0				@ no -> fault
+ 
+ 	str	r2, [r0]			@ hardware version
++
++	@ Handle Huge Pages
++	tst	r1, #L_PTE_HUGE
++	beq	0f
++
++	@ Now create our LARGE PTE from the current EXT one.
++	bic	r3, r2, #0x0000f000
++	bic	r3, r3, #PTE_TYPE_MASK
++	orr	r3, r3, #PTE_TYPE_LARGE
++	and	r2, r3, #0x30			@ EXT_AP --> LARGE_AP0
++	orr	r2, r2, r2, lsl #2		@ add LARGE_AP1
++	orr	r2, r2, r2, lsl #4		@ add LARGE_AP3 + LARGE_AP2
++	and	r1, r3, #0x3c0			@ EXT_TEX
++	bic	r3, r3, #0xff0
++	orr	r2, r2, r1, lsl #(12 - 6)	@ --> LARGE_TEX
++	orr	r2, r2, r3			@ add remaining bits
++
++	str	r2, [r0]
++		
++ 0:	mov	r0, r0
+ 	mov	ip, #0
+ 	mcr	p15, 0, r0, c7, c10, 1		@ Clean D cache line
+ 	mcr	p15, 0, ip, c7, c10, 4		@ Drain Write (& Fill) Buffer
+ 	cpwait	ip
+-	mov	pc, lr
+-
++	ldmfd	sp!, {r0 - r4, ip, pc}
+ 
+ 	.ltorg
+ 
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/drivers/video/zylonitefb.c linux.noL2.hp2/drivers/video/zylonitefb.c
+--- linux.noL2/drivers/video/zylonitefb.c	2006-05-30 10:24:35.000000000 +0800
++++ linux.noL2.hp2/drivers/video/zylonitefb.c	2006-06-16 19:54:35.693754368 +0800
+@@ -20,6 +20,11 @@
+  *
+  *	linux-arm-kernel@lists.arm.linux.org.uk
+  *
++ * Code Status:
++ *
++ * 2006/05/26: <lea.li@intel.com>
++ *	- Added Huge Page mapping support for Base Frame, Overlay1 & Overlay2
++ *        working buffers.
+  */
+ 
+ #include <linux/config.h>
+@@ -347,6 +352,7 @@
+  */
+ static int pxafb_set_par(struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
+ 	struct pxafb_info *fbi = (struct pxafb_info *)info;
+ 	struct fb_var_screeninfo *var = &info->var;
+ 	unsigned long palette_mem_size;
+@@ -391,8 +397,16 @@
+ 
+ 	DPRINTK("palette_mem_size = 0x%08lx\n", (u_long) palette_mem_size);
+ 
+-	fbi->palette_cpu = (u16 *)(fbi->map_cpu + PAGE_SIZE - palette_mem_size);
+-	fbi->palette_dma = fbi->map_dma + PAGE_SIZE - palette_mem_size;
++	/*
++	 * Note: when using Huge Page maping, we have to swap the 
++	 * positions of the palette page & the frame buffer pages.
++	 */
++	fbi->palette_cpu = (u16 *)(fbi->map_cpu + PAGE_ALIGN(fbi->fb.fix.smem_len) + 
++		PAGE_SIZE - palette_mem_size);
++	fbi->palette_dma = fbi->map_dma + PAGE_ALIGN(fbi->fb.fix.smem_len) + 
++		PAGE_SIZE - palette_mem_size;
++	HUGE_PAGE_DEBUG_EX(("palette_cpu=0x%08x, palette_dma=0x%08x\n", 
++		fbi->palette_cpu, fbi->palette_dma));
+ 
+ 	/*
+ 	 * Set (any) board control register to handle new color depth
+@@ -480,11 +494,32 @@
+ static int pxafb_mmap(struct fb_info *info, struct file *file,
+ 		      struct vm_area_struct *vma)
+ {
++	unsigned long vma_len;
+ 	struct pxafb_info *fbi = (struct pxafb_info *)info;
+ 	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
++	HUGE_PAGE_DEBUG_EX(("pxafb_mmap: vma=0x%008x->0x%08x\n", vma->vm_start, vma->vm_end))
++	HUGE_PAGE_DEBUG_EX(("pgoff=0x%08x, off=0x%08x\n", vma->vm_pgoff, off))
++
++	/* Try Huge Page mapping if possible */
++	vma_len = vma->vm_end - vma->vm_start;
++	if(off == 0) {
++		if (do_munmap(vma->vm_mm, vma->vm_start, vma_len) != 0) {
++			DPRINTK("error at do_munmap()\n");
++			return -EINVAL;
++		}
++
++		vma_len = HUGE_PAGE_ALIGN(fbi->map_size);
++		vma->vm_start = get_unmapped_huge_area(file, vma->vm_start, vma_len, 0, 0);
++		vma->vm_end = vma->vm_start + vma_len;
++		HUGE_PAGE_DEBUG_EX(("pxafb_mmap: vma=0x%008x->0x%08x\n", 
++			vma->vm_start, vma->vm_end))
++
++		vma->vm_flags |= VM_IO | VM_HUGEPAGE | VM_RESERVED;
++		pgprot_val(vma->vm_page_prot) &= ~L_PTE_CACHEABLE;
++		pgprot_val(vma->vm_page_prot) |= L_PTE_HUGE;
++	}
+ 
+ 	if (off < info->fix.smem_len) {
+-		vma->vm_pgoff += 1;
+ 		return dma_mmap_writecombine(fbi->dev, vma, fbi->map_cpu,
+ 					     fbi->map_dma, fbi->map_size);
+ 	}
+@@ -748,6 +783,7 @@
+ static int pxafb_activate_var(struct fb_var_screeninfo *var, 
+ 		struct pxafb_info *fbi)
+ {
++	HUGE_PAGE_DEBUG
+ 	struct pxafb_mach_info *inf;
+ 	P_XLLP_LCD_T xllp_lcd = &fbi->xllp_lcd;
+ 	int size = XLLP_DESC_SIZE;
+@@ -771,19 +807,21 @@
+ 	xllp_lcd->_PALETTE_BUFFER_BASE_PHYSICAL = fbi->palette_dma;
+ 
+ 	/* lcd_frame_descriptor_t is not 16 byte */
+-	xllp_lcd->_DMA_CHANNEL_0_FRAME_DESCRIPTOR_BASE_PHYSICAL = fbi->map_dma;
++	xllp_lcd->_DMA_CHANNEL_0_FRAME_DESCRIPTOR_BASE_PHYSICAL = fbi->map_dma + 
++		PAGE_ALIGN(fbi->fb.fix.smem_len);
+ 	//FIXME: Actually, not support palette now
+ 	xllp_lcd->_DMA_CHANNEL_0_ALT_FRAME_DESCRIPTOR_BASE_PHYSICAL = 
+-		fbi->map_dma + 2 * size;
++		fbi->map_dma + PAGE_ALIGN(fbi->fb.fix.smem_len) + 2 * size;
+ 	xllp_lcd->_PALETTE_FRAME_DESCRIPTOR_BASE_PHYSICAL = 
+-		fbi->map_dma + 3 * size;
++		fbi->map_dma + PAGE_ALIGN(fbi->fb.fix.smem_len) + 3 * size;
+ 
+ 
+-	xllp_lcd->frameDescriptorCh0fd1 = (LCD_FRAME_DESCRIPTOR *) fbi->map_cpu;
+-	xllp_lcd->frameDescriptorCh0fd2 = 
+-		(LCD_FRAME_DESCRIPTOR *) fbi->map_cpu + 2 * size;
+-	xllp_lcd->frameDescriptorPalette = 
+-		(LCD_FRAME_DESCRIPTOR *) fbi->map_cpu + 3 * size;
++	xllp_lcd->frameDescriptorCh0fd1 = (LCD_FRAME_DESCRIPTOR *) (fbi->map_cpu + 
++		PAGE_ALIGN(fbi->fb.fix.smem_len));
++	xllp_lcd->frameDescriptorCh0fd2 = (LCD_FRAME_DESCRIPTOR *) (fbi->map_cpu + 
++		PAGE_ALIGN(fbi->fb.fix.smem_len) + 2 * size);
++	xllp_lcd->frameDescriptorPalette = (LCD_FRAME_DESCRIPTOR *) (fbi->map_cpu + 
++		PAGE_ALIGN(fbi->fb.fix.smem_len) + 3 * size);
+ 	
+ 	pxafb_schedule_work(fbi, C_REENABLE);
+ 
+@@ -1270,7 +1308,11 @@
+ 	 * We reserve one page for the palette, plus the size
+ 	 * of the framebuffer.
+ 	 */
++#ifdef CONFIG_FB_PXA_IN_SRAM  
+ 	fbi->map_size = PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
++#else
++	fbi->map_size = HUGE_PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
++#endif
+  
+ #ifdef CONFIG_FB_PXA_IN_SRAM  
+ 	if ((fbi->map_size < IMM_SRAM_SIZE) &&
+@@ -1280,17 +1322,29 @@
+ 		fbi->map_dma = imm_get_physical(fbi->map_cpu, zylfb_immid);
+ 	} else {
+ #endif
+-		fbi->map_cpu = dma_alloc_writecombine(fbi->dev, fbi->map_size,
++		fbi->map_cpu = dma_alloc_huge_writecombine(fbi->dev, fbi->map_size,
+ 					&fbi->map_dma, GFP_KERNEL);
+ #ifdef CONFIG_FB_PXA_IN_SRAM
+ 	}
+ #endif
+ 
++	HUGE_PAGE_DEBUG_EX(("Alloc base fb: va=0x%08x, size=0x%08x, pa=0x%08x\n", 
++		fbi->map_cpu, fbi->map_size, fbi->map_dma))
++		
++	printk("HugePage FB dev enabled - base fb: va=0x%08x, sz=0x%08x, pa=0x%08x\n", 
++		fbi->map_cpu, fbi->map_size, fbi->map_dma);
++
+ 	if (fbi->map_cpu) {
+ 		/* prevent initial garbage on screen */
+ 		memset(fbi->map_cpu, 0, fbi->map_size);
+-		fbi->fb.screen_base = fbi->map_cpu + PAGE_SIZE;
+-		fbi->screen_dma = fbi->map_dma + PAGE_SIZE;
++
++		/*
++		 * Note: when using Huge Page maping, we have to swap the 
++		 * positions of the palette page & the frame buffer pages.
++		 */
++		fbi->fb.screen_base = fbi->map_cpu;
++		fbi->screen_dma = fbi->map_dma;
++
+ 		/*
+ 		 * FIXME: this is actually the wrong thing to place in
+ 		 * smem_start.  But fbdev suffers from the problem that
+@@ -1298,14 +1352,24 @@
+ 		 * dma_writecombine_mmap)
+ 		 */
+ 		fbi->fb.fix.smem_start = fbi->screen_dma;
++		HUGE_PAGE_DEBUG_EX(("fbi->fb.fix.smem_start = fbi->screen_dma = 0x%08x\n", 
++			fbi->screen_dma))
+ 
+ 		fbi->palette_size = fbi->fb.var.bits_per_pixel == 8 ? 256 : 16;
+ 
+ 		palette_mem_size = fbi->palette_size * sizeof(u16);
+ 		DPRINTK("palette_mem_size = 0x%08lx\n", (u_long) palette_mem_size);
+ 
+-		fbi->palette_cpu = (u16 *)(fbi->map_cpu + PAGE_SIZE - palette_mem_size);
+-		fbi->palette_dma = fbi->map_dma + PAGE_SIZE - palette_mem_size;
++		/*
++		 * Note: when using Huge Page maping, we have to swap the 
++		 * positions of the palette page & the frame buffer pages.
++		 */
++		fbi->palette_cpu = (u16 *)(fbi->map_cpu + PAGE_ALIGN(fbi->fb.fix.smem_len) 
++			+ PAGE_SIZE - palette_mem_size);
++		fbi->palette_dma = fbi->map_dma + PAGE_ALIGN(fbi->fb.fix.smem_len) 
++			+ PAGE_SIZE - palette_mem_size;
++		HUGE_PAGE_DEBUG_EX(("palette_cpu=0x%08x, palette_dma=0x%08x\n", 
++			fbi->palette_cpu, fbi->palette_dma))
+ 	}
+ 
+ 	return fbi->map_cpu ? 0 : -ENOMEM;
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/drivers/video/zylonitefb_overlay.c linux.noL2.hp2/drivers/video/zylonitefb_overlay.c
+--- linux.noL2/drivers/video/zylonitefb_overlay.c	2006-05-30 10:24:35.000000000 +0800
++++ linux.noL2.hp2/drivers/video/zylonitefb_overlay.c	2006-06-08 16:19:48.000000000 +0800
+@@ -13,6 +13,8 @@
+  *      - Added workaround for overlay1&2
+  * 	2003/08/27: <yu.tang@intel.com>
+  *      - Added Overlay 1 & Overlay2 & Hardware Cursor support
++ * 	2006/05/26: <lea.li@intel.com>
++ *      - Added Huge Page mapping support for Overlay1 & Overlay2 working buffers
+  *
+  *
+  * 	This software program is licensed subject to the GNU Lesser General 
+@@ -242,29 +244,39 @@
+ 
+ static int overlay1fb_map_video_memory(struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
+ 	struct overlayfb_info *fbi = (struct overlayfb_info*) info;
+ 
+ 	if (fbi->map_cpu) {
+ 		dma_free_writecombine(NULL, fbi->map_size, (void*)fbi->map_cpu,  fbi->map_dma);
+ 		fbi->map_cpu = 0;
+ 	}
+-	fbi->map_size = PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
++	fbi->map_size = HUGE_PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
+ 
+-	fbi->map_cpu = (unsigned long)dma_alloc_writecombine(NULL, fbi->map_size,
++	fbi->map_cpu = (unsigned long)dma_alloc_huge_writecombine(NULL, fbi->map_size,
+ 					       &fbi->map_dma, GFP_KERNEL );
+ 
++	HUGE_PAGE_DEBUG_EX(("Alloc ovl1 fb: va=0x%08x, size=0x%08x, pa=0x%08x\n", 
++		fbi->map_cpu, fbi->map_size, fbi->map_dma))
++		
+ 	if (!fbi->map_cpu) return -ENOMEM;
+ 
+-	fbi->screen_cpu = fbi->map_cpu + PAGE_SIZE;
+-	fbi->screen_dma = fbi->map_dma + PAGE_SIZE;
++	/*
++	 * Note: when using Huge Page maping, we have to swap the 
++	 * positions of the palette page & the frame buffer pages.
++	 */
++	fbi->screen_cpu = fbi->map_cpu;
++	fbi->screen_dma = fbi->map_dma;
+ 	
+ 	fbi->fb.fix.smem_start = fbi->screen_dma;
+ 
+ 	/* setup dma descriptor */
+ 	fbi->dma1 = (struct pxafb_dma_descriptor*)
+-		(fbi->screen_cpu - sizeof(struct pxafb_dma_descriptor));
++		(fbi->screen_cpu + fbi->fb.fix.smem_len + PAGE_SIZE 
++		- sizeof(struct pxafb_dma_descriptor));
+ 
+-	fbi->dma1->fdadr = (fbi->screen_dma - sizeof(struct pxafb_dma_descriptor));
++	fbi->dma1->fdadr = (fbi->screen_dma + fbi->fb.fix.smem_len + PAGE_SIZE
++		- sizeof(struct pxafb_dma_descriptor));
+ 	fbi->dma1->fsadr = fbi->screen_dma;
+ 	fbi->dma1->fidr  = 0;
+ 	fbi->dma1->ldcmd = fbi->fb.fix.smem_len;
+@@ -411,6 +423,7 @@
+ 
+ static int overlay1fb_set_par(struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
+ 	int nbytes=0, err=0, pixels_per_line=0;
+ 
+ 	struct overlayfb_info *fbi=(struct overlayfb_info*)info;
+@@ -508,14 +521,35 @@
+ 
+ 		      struct vm_area_struct *vma)
+ {
++	HUGE_PAGE_DEBUG
+ 	struct overlayfb_info *fbi = (struct overlayfb_info *)info;
+ 	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
++	HUGE_PAGE_DEBUG_EX(("pgoff=0x%08x, off=0x%08x\n", vma->vm_pgoff, off))
++
++	/* Try Huge Page mapping if possible */
++	unsigned long vma_len = vma->vm_end - vma->vm_start;
++	if(off == 0) {
++		if (do_munmap(vma->vm_mm, vma->vm_start, vma_len) != 0) {
++			DPRINTK("error at do_munmap()\n");
++			return -EINVAL;
++		}
++
++		vma_len = HUGE_PAGE_ALIGN(fbi->map_size);
++		vma->vm_start = get_unmapped_huge_area(file, vma->vm_start, vma_len, 0, 0);
++		vma->vm_end = vma->vm_start + vma_len;
++		HUGE_PAGE_DEBUG_EX(("pxafb_mmap: vma=0x%008x->0x%08x\n", 
++			vma->vm_start, vma->vm_end))
++
++		vma->vm_flags |= VM_IO | VM_HUGEPAGE | VM_RESERVED;
++		pgprot_val(vma->vm_page_prot) &= ~L_PTE_CACHEABLE;
++		pgprot_val(vma->vm_page_prot) |= L_PTE_HUGE;
++	}
+ 
+ 	if (off < info->fix.smem_len) {
+-		vma->vm_pgoff += 1;
+ 		return dma_mmap_writecombine(fbi->basefb->dev, vma, (void*)fbi->map_cpu,
+ 					     fbi->map_dma, fbi->map_size);
+ 	}
++
+ 	return -EINVAL;
+ }
+ 
+@@ -584,6 +618,8 @@
+ 
+ static int overlay2fb_map_YUV_memory( struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
++	unsigned int len;
+ 	struct overlayfb_info *fbi = (struct overlayfb_info*) info;
+ 	unsigned int ylen, cblen, crlen, aylen, acblen, acrlen;
+ 	unsigned int yoff, cboff, croff;
+@@ -643,18 +679,25 @@
+ 	acblen = (cblen + 0xf) & (~0xf);
+ 	acrlen = (crlen + 0xf) & (~0xf);
+ 
+-	fbi->fb.fix.smem_len = aylen + acblen + acrlen;
++	fbi->fb.fix.smem_len = len = aylen + acblen + acrlen;
+ 
+ 	/* alloc memory */
+ 
+-	fbi->map_size = PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
+-	fbi->map_cpu = (unsigned long)dma_alloc_writecombine(NULL, fbi->map_size,
++	fbi->map_size = HUGE_PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
++	fbi->map_cpu = (unsigned long)dma_alloc_huge_writecombine(NULL, fbi->map_size,
+ 					       &fbi->map_dma, GFP_KERNEL );
+ 	
++	HUGE_PAGE_DEBUG_EX(("Alloc ovl2 YUV fb: va=0x%08x, size=0x%08x, pa=0x%08x\n", 
++		fbi->map_cpu, fbi->map_size, fbi->map_dma))
++		
+ 	if (!fbi->map_cpu) return -ENOMEM;
+ 
+-	fbi->screen_cpu = fbi->map_cpu + PAGE_SIZE;
+-	fbi->screen_dma = fbi->map_dma + PAGE_SIZE;
++	/*
++	 * Note: when using Huge Page maping, we have to swap the 
++	 * positions of the palette page & the frame buffer pages.
++	 */
++	fbi->screen_cpu = fbi->map_cpu;
++	fbi->screen_dma = fbi->map_dma;
+ 	
+ 	fbi->fb.fix.smem_start = fbi->screen_dma;
+ 
+@@ -664,23 +707,23 @@
+ 	croff = cboff + acblen;
+ 
+ 	xllp_lcd->_DMA_CHANNEL_2_Y_FRAME_DESCRIPTOR_BASE_PHYSICAL =
+-		fbi->screen_dma - size;
++		fbi->screen_dma + len + PAGE_SIZE - size;
+ 	xllp_lcd->frameDescriptorCh2_YCbCr_Y = 
+-		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu - size);
++		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu + len + PAGE_SIZE - size);
+ 	xllp_lcd->_OVERLAY2_Y_CHANNEL_BASE_PHYSICAL = 
+ 		fbi->screen_dma + yoff;
+ 
+ 	xllp_lcd->_DMA_CHANNEL_3_Cb_FRAME_DESCRIPTOR_BASE_PHYSICAL =
+-		fbi->screen_dma - 2 * size;
++		fbi->screen_dma + len + PAGE_SIZE - 2 * size;
+ 	xllp_lcd->frameDescriptorCh3_YCbCr_Cb =
+-		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu - 2 * size);
++		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu + len + PAGE_SIZE - 2 * size);
+ 	xllp_lcd->_OVERLAY2_Cb_CHANNEL_BASE_PHYSICAL = 
+ 		fbi->screen_dma + cboff;
+ 
+ 	xllp_lcd->_DMA_CHANNEL_4_Cr_FRAME_DESCRIPTOR_BASE_PHYSICAL =
+-		fbi->screen_dma - 3 * size;
++		fbi->screen_dma + len + PAGE_SIZE - 3 * size;
+ 	xllp_lcd->frameDescriptorCh4_YCbCr_Cr =
+-		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu - 3 * size);
++		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu + len + PAGE_SIZE - 3 * size);
+ 	xllp_lcd->_OVERLAY2_Cr_CHANNEL_BASE_PHYSICAL =
+ 		fbi->screen_dma + croff;
+ 
+@@ -697,6 +740,8 @@
+ 
+ static int overlay2fb_map_RGB_memory( struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
++	unsigned int len;
+ 	struct overlayfb_info *fbi = (struct overlayfb_info*) info;
+ 	struct fb_var_screeninfo *var = &fbi->fb.var;
+ 	int pixels_per_line=0 , nbytes=0;
+@@ -766,23 +811,30 @@
+ 	}
+ 
+ 	fbi->fb.fix.line_length = nbytes * pixels_per_line ;
+-	fbi->fb.fix.smem_len = fbi->fb.fix.line_length * fbi->fb.var.yres ;
++	fbi->fb.fix.smem_len = len = fbi->fb.fix.line_length * fbi->fb.var.yres ;
+ 
+-	fbi->map_size = PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
+-	fbi->map_cpu = (unsigned long)dma_alloc_writecombine(NULL, fbi->map_size,
++	fbi->map_size = HUGE_PAGE_ALIGN(fbi->fb.fix.smem_len + PAGE_SIZE);
++	fbi->map_cpu = (unsigned long)dma_alloc_huge_writecombine(NULL, fbi->map_size,
+ 					       &fbi->map_dma, GFP_KERNEL );
+ 	
++	HUGE_PAGE_DEBUG_EX(("Alloc ovl2 RGB fb: va=0x%08x, size=0x%08x, pa=0x%08x\n", 
++		fbi->map_cpu, fbi->map_size, fbi->map_dma))
++		
+ 	if (!fbi->map_cpu) return -ENOMEM;
+ 
+-	fbi->screen_cpu = fbi->map_cpu + PAGE_SIZE;
+-	fbi->screen_dma = fbi->map_dma + PAGE_SIZE;
++	/*
++	 * Note: when using Huge Page maping, we have to swap the 
++	 * positions of the palette page & the frame buffer pages.
++	 */
++	fbi->screen_cpu = fbi->map_cpu;
++	fbi->screen_dma = fbi->map_dma;
+ 
+ 	fbi->fb.fix.smem_start = fbi->screen_dma;
+ 
+ 	xllp_lcd->_DMA_CHANNEL_2_Y_FRAME_DESCRIPTOR_BASE_PHYSICAL =
+-		fbi->screen_dma - size;
++		fbi->screen_dma + len + PAGE_SIZE - size;
+ 	xllp_lcd->frameDescriptorCh2_YCbCr_Y = 
+-		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu - size);
++		(LCD_FRAME_DESCRIPTOR *)(fbi->screen_cpu + len + PAGE_SIZE - size);
+ 	xllp_lcd->_OVERLAY2_Y_CHANNEL_BASE_PHYSICAL = 
+ 		fbi->screen_dma;
+ 	
+@@ -995,6 +1047,7 @@
+ 
+ static int overlay2fb_set_par(struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
+ 	unsigned int xpos, ypos;
+ 	int format, err;
+ 
+@@ -1195,6 +1248,7 @@
+ 
+ static int cursorfb_set_par(struct fb_info *info)
+ {
++	HUGE_PAGE_DEBUG
+ 	struct overlayfb_info *fbi = (struct overlayfb_info*) info;
+ 	struct fb_var_screeninfo *var = &fbi->fb.var;
+ 	struct cursorfb_mode *cursor;
+@@ -1228,6 +1282,9 @@
+  			if (!fbi->map_cpu) return -ENOMEM;
+ 		}
+ 
++		HUGE_PAGE_DEBUG_EX(("Alloc cursor fb: va=0x%08x, size=0x%08x, pa=0x%08x\n", 
++			fbi->map_cpu, fbi->map_size, fbi->map_dma))
++
+ 		cursor = cursorfb_modes + mode;
+ 
+ 		/* update overlay & fix "info" */
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/fs/binfmt_elf.c linux.noL2.hp2/fs/binfmt_elf.c
+--- linux.noL2/fs/binfmt_elf.c	2006-05-30 10:24:00.000000000 +0800
++++ linux.noL2.hp2/fs/binfmt_elf.c	2006-06-16 19:15:39.604893856 +0800
+@@ -100,7 +100,16 @@
+ 		if (BAD_ADDR(addr))
+ 			return addr;
+ 	}
+-	current->mm->start_brk = current->mm->brk = end;
++
++#ifdef HUGE_PAGE_BRK
++	/* Make the brk HUGE_PAGE_ALIGN'ed to apply huge pages later */
++	current->mm->start_brk = current->mm->brk = HUGE_PAGE_ALIGN(end);
++	HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: set_brk: brk=0x%08x --> 0x%08x\n", 
++		current->pid, current->comm, end, HUGE_PAGE_ALIGN(end)))
++#else
++	current->mm->start_brk = current->mm->brk = PAGE_ALIGN(end);
++#endif
++
+ 	return 0;
+ }
+ 
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/include/asm-arm/dma-mapping.h linux.noL2.hp2/include/asm-arm/dma-mapping.h
+--- linux.noL2/include/asm-arm/dma-mapping.h	2006-05-30 10:24:44.000000000 +0800
++++ linux.noL2.hp2/include/asm-arm/dma-mapping.h	2006-05-30 14:26:21.000000000 +0800
+@@ -126,6 +126,19 @@
+ 			  void *cpu_addr, dma_addr_t handle, size_t size);
+ 
+ 
++/*
++ * Similar with dma_alloc_coherent() & dma_alloc_writecombine().
++ * These functions ensure the (*handle) of dma to be HUGE_PAGE_ALIGN'ed.
++ * The "size" is better to be HUGE_PAGE_ALIGN'ed if enabling the flag of
++ * L_PTE_HUGE when calling set_pte() , or the UNUSED virtual memory block 
++ * should NOT be used any longer (to avoid potential security issues)!
++ */
++extern void *
++dma_alloc_huge_coherent(struct device *dev, size_t size, dma_addr_t *handle, int gfp);
++
++extern void *
++dma_alloc_huge_writecombine(struct device *dev, size_t size, dma_addr_t *handle, int gfp);
++
+ /**
+  * dma_map_single - map a single buffer for streaming DMA
+  * @dev: valid struct device pointer, or NULL for ISA and EISA-like devices
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/include/asm-arm/page.h linux.noL2.hp2/include/asm-arm/page.h
+--- linux.noL2/include/asm-arm/page.h	2006-05-30 10:24:44.000000000 +0800
++++ linux.noL2.hp2/include/asm-arm/page.h	2006-06-16 19:42:16.058196064 +0800
+@@ -17,10 +17,59 @@
+ #define PAGE_SIZE		(1UL << PAGE_SHIFT)
+ #define PAGE_MASK		(~(PAGE_SIZE-1))
+ 
++/* Switch to enable Huge Page Mapping */
++#define HUGE_PAGE_MEMORY_MANAGEMENT
++
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++
++	/* Switch to enable Huge Page mmaping for drivers */
++	#define HUGE_PAGE_FB_DEV_BASE
++	#define HUGE_PAGE_FB_DEV_OVL1
++	#define HUGE_PAGE_FB_DEV_OVL2
++	#define HUGE_PAGE_CAMERA_DEV
++	
++	/* Switch to enable Huge Page brk */
++	#define HUGE_PAGE_BRK
++	
++	/* Switch to enable Huge Page anon mmap */
++	#define HUGE_PAGE_ANON_MMAP
++	
++	/* Switch to enable Huge Page COW */
++	#define HUGE_PAGE_COW
++	
++	#ifdef HUGE_PAGE_COW
++	
++		/* Switch to enable reuse in COW */
++		#define HUGE_PAGE_COW_REUSE
++		
++		/* Switch to enable huge page table attribute in COW */
++		#define HUGE_PAGE_COW_SETPTE
++		
++	#endif
++
++#endif
++
++/* HUGE_PAGE_SHIFT determines the huge page size */
++#define HUGE_PAGE_SHIFT 16
++#define HUGE_PAGE_SIZE  (1UL << HUGE_PAGE_SHIFT)
++#define HUGE_PAGE_MASK  (~(HUGE_PAGE_SIZE-1))
++#define HUGE_PAGE_ORDER	(HUGE_PAGE_SHIFT-PAGE_SHIFT)
++
++/* Switch to enable Huge Page DEBUG info */
++#if 0
++#define HUGE_PAGE_DEBUG printk("%s: %d (%s)\n", __FILE__, __LINE__, __func__);
++#define HUGE_PAGE_DEBUG_EX(x) printk x;
++#else
++#define HUGE_PAGE_DEBUG
++#define HUGE_PAGE_DEBUG_EX(x)
++#endif
++
+ #ifdef __KERNEL__
+ 
+ /* to align the pointer to the (next) page boundary */
+ #define PAGE_ALIGN(addr)	(((addr)+PAGE_SIZE-1)&PAGE_MASK)
++#define HUGE_PAGE_ALIGN(addr)	(((addr)+HUGE_PAGE_SIZE-1)&HUGE_PAGE_MASK)
++
+ 
+ #ifndef __ASSEMBLY__
+ 
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/include/asm-arm/pgtable.h linux.noL2.hp2/include/asm-arm/pgtable.h
+--- linux.noL2/include/asm-arm/pgtable.h	2006-05-30 10:24:44.000000000 +0800
++++ linux.noL2.hp2/include/asm-arm/pgtable.h	2006-05-30 14:26:21.000000000 +0800
+@@ -234,6 +234,7 @@
+ #define L_PTE_WRITE		(1 << 5)
+ #define L_PTE_EXEC		(1 << 6)
+ #define L_PTE_DIRTY		(1 << 7)
++#define L_PTE_HUGE		(1 << 8)		/* Huge Page PTE */
+ 
+ #ifndef __ASSEMBLY__
+ 
+@@ -302,6 +303,7 @@
+ #define pte_offset_map(dir,addr)	(pmd_page_kernel(*(dir)) + __pte_index(addr))
+ #define pte_offset_map_nested(dir,addr)	(pmd_page_kernel(*(dir)) + __pte_index(addr))
+ #define pte_unmap(pte)		do { } while (0)
++#define huge_pte_unmap(pte)	do { } while (0)
+ #define pte_unmap_nested(pte)	do { } while (0)
+ 
+ #define set_pte(ptep, pte)	cpu_set_pte(ptep,pte)
+@@ -340,6 +342,8 @@
+ PTE_BIT_FUNC(mkdirty,   |= L_PTE_DIRTY);
+ PTE_BIT_FUNC(mkold,     &= ~L_PTE_YOUNG);
+ PTE_BIT_FUNC(mkyoung,   |= L_PTE_YOUNG);
++PTE_BIT_FUNC(mksmall,	&= ~L_PTE_HUGE);
++PTE_BIT_FUNC(mkhuge,	|= L_PTE_HUGE);
+ 
+ /*
+  * Mark the prot value as uncacheable and unbufferable.
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/include/linux/gfp.h linux.noL2.hp2/include/linux/gfp.h
+--- linux.noL2/include/linux/gfp.h	2006-05-30 10:24:42.000000000 +0800
++++ linux.noL2.hp2/include/linux/gfp.h	2006-05-30 14:26:21.000000000 +0800
+@@ -94,6 +94,8 @@
+ 		NODE_DATA(nid)->node_zonelists + (gfp_mask & GFP_ZONEMASK));
+ }
+ 
++extern struct page * FASTCALL(__alloc_huge_page(unsigned int gfp));
++
+ #ifdef CONFIG_NUMA
+ extern struct page *alloc_pages_current(unsigned int __nocast gfp_mask, unsigned order);
+ 
+@@ -107,10 +109,12 @@
+ }
+ extern struct page *alloc_page_vma(unsigned __nocast gfp_mask,
+ 			struct vm_area_struct *vma, unsigned long addr);
++/* Currently NO support to alloc_huge_page_vma(gfp_mask, vma, addr) */
+ #else
+ #define alloc_pages(gfp_mask, order) \
+ 		alloc_pages_node(numa_node_id(), gfp_mask, order)
+ #define alloc_page_vma(gfp_mask, vma, addr) alloc_pages(gfp_mask, 0)
++#define alloc_huge_page_vma(gfp_mask, vma, addr) __alloc_huge_page(gfp_mask)
+ #endif
+ #define alloc_page(gfp_mask) alloc_pages(gfp_mask, 0)
+ 
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/include/linux/mm.h linux.noL2.hp2/include/linux/mm.h
+--- linux.noL2/include/linux/mm.h	2006-05-30 10:24:42.000000000 +0800
++++ linux.noL2.hp2/include/linux/mm.h	2006-06-16 19:42:24.292944192 +0800
+@@ -162,6 +162,8 @@
+ #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
+ #define VM_NONLINEAR	0x00800000	/* Is non-linear (remap_file_pages) */
+ #define VM_MAPPED_COPY	0x01000000	/* T if mapped copy of data (nommu mmap) */
++#define VM_HUGEPAGE	0x02000000	/* Huge Page VM (to avoid potential conflict with VM_HUGETLB) */
++
+ 
+ #ifndef VM_STACK_DEFAULT_FLAGS		/* arch can override this */
+ #define VM_STACK_DEFAULT_FLAGS VM_DATA_DEFAULT_FLAGS
+@@ -344,6 +346,22 @@
+ 
+ #endif		/* CONFIG_HUGETLB_PAGE */
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++static inline void get_huge_page(struct page *page)
++{
++	int i;
++	for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--)
++		get_page(page++);
++}
++
++static inline void put_huge_page(struct page *page)
++{
++	int i;
++	for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--)
++		put_page(page++);
++}
++#endif
++
+ /*
+  * Multiple processes may "see" the same page. E.g. for untouched
+  * mappings of /dev/null, all processes see the same page full of
+@@ -729,6 +747,8 @@
+ extern void exit_mmap(struct mm_struct *);
+ extern int may_expand_vm(struct mm_struct *mm, unsigned long npages);
+ 
++extern unsigned long get_unmapped_huge_area(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
++
+ extern unsigned long get_unmapped_area(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
+ 
+ extern unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+@@ -750,6 +770,8 @@
+ 
+ extern int do_munmap(struct mm_struct *, unsigned long, size_t);
+ 
++extern unsigned long do_huge_brk(unsigned long, unsigned long);
++
+ extern unsigned long do_brk(unsigned long, unsigned long);
+ 
+ /* filemap.c */
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/include/linux/sched.h linux.noL2.hp2/include/linux/sched.h
+--- linux.noL2/include/linux/sched.h	2006-05-30 10:24:42.000000000 +0800
++++ linux.noL2.hp2/include/linux/sched.h	2006-05-30 14:26:21.000000000 +0800
+@@ -195,6 +195,9 @@
+ #include <linux/aio.h>
+ 
+ extern unsigned long
++arch_get_unmapped_huge_area(struct file *, unsigned long, unsigned long,
++		       unsigned long, unsigned long);
++extern unsigned long
+ arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
+ 		       unsigned long, unsigned long);
+ extern unsigned long
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/mm/memory.c linux.noL2.hp2/mm/memory.c
+--- linux.noL2/mm/memory.c	2006-05-30 10:24:02.000000000 +0800
++++ linux.noL2.hp2/mm/memory.c	2006-06-16 19:20:42.000000000 +0800
+@@ -38,6 +38,12 @@
+  * Aug/Sep 2004 Changed to four level page tables (Andi Kleen)
+  */
+ 
++/*
++ * 2005-05-26 - Huge page mapping support added. Dynamic memory allocation called 
++ *              from user space upper applications can automatically benefit from it.
++ *              by Lea Li (lea.li@intel.com)
++ */
++
+ #include <linux/kernel_stat.h>
+ #include <linux/mm.h>
+ #include <linux/hugetlb.h>
+@@ -1217,6 +1223,12 @@
+ {
+ 	pte_t entry;
+ 
++#ifdef HUGE_PAGE_COW_SETPTE
++	if(vma->vm_flags & VM_HUGEPAGE)
++		entry = pte_mkhuge(maybe_mkwrite(pte_mkdirty(mk_pte(new_page, 
++			vma->vm_page_prot)), vma));
++	else
++#endif
+ 	entry = maybe_mkwrite(pte_mkdirty(mk_pte(new_page, vma->vm_page_prot)),
+ 			      vma);
+ 	ptep_establish(vma, address, page_table, entry);
+@@ -1224,6 +1236,257 @@
+ 	lazy_mmu_prot_update(entry);
+ }
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++/*
++ * Adjust pte & address to be HUGE_PAGE_ALIGN'ed. 
++ */
++static int inline adjust_huge_pte_addr(pmd_t *pmd, pte_t **ppte, unsigned long *paddr)
++{
++	unsigned long addr;
++	addr = *paddr;
++	if(addr & (~HUGE_PAGE_MASK)) {
++		addr &= HUGE_PAGE_MASK;
++		*ppte = pte_offset_map(pmd, addr);
++		*paddr = addr;
++	}
++	return 0;
++}
++
++/* The following fixup routine is to change current vma to be ordinary extended small page 
++ * With vma->vm_mm->page_table_lock spin_lock'ed.
++ */
++static int mhugepage_fixup(struct vm_area_struct * vma, unsigned long address)
++{
++	int ret = 0;
++	unsigned long start, end;
++	struct mm_struct * mm;
++	HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: fixup addr=0x%08x, vma=(0x%08x, 0x%08x)\n", 
++		current->pid, current->comm, address, vma->vm_start, vma->vm_end))
++	
++	start = address & HUGE_PAGE_MASK;
++	end = start + HUGE_PAGE_SIZE;
++	mm = vma->vm_mm;
++
++	if (start != vma->vm_start) {
++		if (split_vma(mm, vma, start, 1)) {
++			ret = -EAGAIN;
++			HUGE_PAGE_DEBUG_EX(("Error in mhugepage_fixup: start=0x%08x, end=0x%08x\n", 
++				start, end))
++			goto out;
++		}
++	}
++
++	if (end != vma->vm_end) {
++		if (split_vma(mm, vma, end, 0)) {
++			ret = -EAGAIN;
++			HUGE_PAGE_DEBUG_EX(("Error in mhugepage_fixup: start=0x%08x, end=0x%08x\n", 
++				start, end))
++			goto out;
++		}
++	}
++
++	vma->vm_flags &= (~VM_HUGEPAGE) & (~VM_RESERVED);
++
++out:
++	return ret;
++}
++
++/*
++ * Similar with do_wp_page().
++ * Huge page mapping support. 
++ */
++static int do_wp_huge_page(struct mm_struct *mm, struct vm_area_struct * vma,
++	unsigned long address, pte_t *page_table, pmd_t *pmd, pte_t pte)
++{
++	int i;
++	int pte_is_ok;
++#ifdef HUGE_PAGE_COW_REUSE
++	pte_t entry;
++#endif
++	pte_t * huge_pte;
++	unsigned long huge_address;
++	
++	struct page *old_page;
++	struct page *new_page = NULL;
++	struct page *src_page, *dst_page;
++	struct page * new_pages[HUGE_PAGE_SIZE/PAGE_SIZE];
++	unsigned long pfn;
++	
++	HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: wp_huge: addr=0x%08x\n", 
++		current->pid, current->comm, address))
++
++	if(adjust_huge_pte_addr(pmd, &page_table, &address))
++		return VM_FAULT_OOM;
++	
++	huge_address = address;
++	huge_pte = page_table;
++	pte = *page_table;
++	
++	pfn = pte_pfn(pte);
++
++	if (unlikely(!pfn_valid(pfn))) {
++		/* XIP memory will not drop here, which don't have HUGE_PAGE flag set */
++
++		/*
++		 * This should really halt the system so it can be debugged or
++		 * at least the kernel stops what it's doing before it corrupts
++		 * data, but for the moment just pretend this is OOM.
++		 */
++		huge_pte_unmap(huge_pte);
++		printk(KERN_ERR "do_wp_page: bogus page at address %08lx\n",
++				address);
++		spin_unlock(&mm->page_table_lock);
++		return VM_FAULT_OOM;
++	}
++	old_page = pfn_to_page(pfn);
++
++#ifdef HUGE_PAGE_COW_REUSE
++	if (!TestSetPageLocked(old_page)) {
++		int reuse = can_share_swap_page(old_page);
++		unlock_page(old_page);
++		if (reuse) {
++			HUGE_PAGE_DEBUG_EX(("\tReuse\n"))
++			for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--) {
++				pfn = pte_pfn(*page_table);
++				flush_cache_page(vma, address, pfn);
++				entry = pte_mkhuge(maybe_mkwrite(pte_mkyoung(pte_mkdirty(*page_table)), 
++					vma));
++				ptep_set_access_flags(vma, address, page_table, entry, 1);
++				update_mmu_cache(vma, address, entry);
++				lazy_mmu_prot_update(entry);
++				pte_unmap(page_table);
++				
++				page_table ++;
++				address += PAGE_SIZE;
++			}
++			spin_unlock(&mm->page_table_lock);
++			return VM_FAULT_MINOR;
++		}
++	}
++#endif
++	huge_pte_unmap(huge_pte);	
++	
++	/*
++	 * Ok, we need to copy. Oh, well..
++	 */
++	get_huge_page(old_page);
++	spin_unlock(&mm->page_table_lock);
++
++	if (unlikely(anon_vma_prepare(vma)))
++		goto no_new_page;
++
++#ifdef HUGE_PAGE_COW
++	/* Try huge page first */
++	new_page = alloc_huge_page_vma(GFP_HIGHUSER | __GFP_NOWARN, vma, address);
++	//new_page = alloc_huge_page_vma(GFP_HIGHUSER, vma, address);
++	if (new_page) {
++		/* Init huge page */
++		address = huge_address;
++		src_page = old_page;
++		dst_page = new_page;
++		for(i=0; i<HUGE_PAGE_SIZE/PAGE_SIZE; i++) {
++			//set_page_count(dst_page, 1);
++			copy_user_highpage(dst_page, src_page, address);
++
++			src_page ++;
++			dst_page ++;
++			address += PAGE_SIZE;
++		}
++	} else {
++		HUGE_PAGE_DEBUG_EX(("Warn: do_wp_huge_page failed: addr=0x%08x\n", address))
++#endif
++		/* Disable current huge-page mapping if no huge-page memory temporarily */
++		if(mhugepage_fixup(vma, address))
++			goto no_new_page;
++
++		/* Try small pages then */
++		src_page = old_page;
++		for(i=0; i<HUGE_PAGE_SIZE/PAGE_SIZE; i++) {
++			new_pages[i] = alloc_page_vma(GFP_HIGHUSER, vma, address);
++			if (!(new_pages[i])) {
++				/* Free the allocated pages */
++				for(i--; i>0; i--)
++					page_cache_release(new_pages[i]);
++				goto no_new_page;
++			}
++			copy_user_highpage(new_pages[i], src_page, address);
++			src_page ++;
++			address += PAGE_SIZE;
++		}
++#ifdef HUGE_PAGE_COW
++	}
++#endif
++	
++	/*
++	 * Re-check the pte - we dropped the lock
++	 */
++	pte_is_ok = 0;
++	address = huge_address;
++	src_page = old_page;
++	page_table = huge_pte;
++	spin_lock(&mm->page_table_lock);
++
++	if(new_page) {
++		if (likely(pte_same(*page_table, pte))) {
++			dst_page = new_page;
++			for(i=0; i<HUGE_PAGE_SIZE/PAGE_SIZE; i++) {
++				if (PageAnon(src_page))
++					dec_mm_counter(mm, anon_rss);
++				page_remove_rmap(src_page);
++				//SetPageReferenced(dst_page);
++				pfn = pte_pfn(*page_table);
++				flush_cache_page(vma, address, pfn);
++				break_cow(vma, dst_page, address, page_table);
++				page_add_anon_rmap(dst_page, vma, address);
++				src_page ++;
++				dst_page ++;
++				page_table ++;
++				address += PAGE_SIZE;
++			}
++			pte_is_ok = 1;
++		}
++	} else {
++		if (likely(pte_same(*page_table, pte))) {
++			for(i=0; i<HUGE_PAGE_SIZE/PAGE_SIZE; i++) {
++				dst_page = new_pages[i];
++				if (PageAnon(src_page))
++					dec_mm_counter(mm, anon_rss);
++				page_remove_rmap(src_page);
++				//SetPageReferenced(dst_page);
++				pfn = pte_pfn(*page_table);
++				flush_cache_page(vma, address, pfn);
++				break_cow(vma, dst_page, address, page_table);
++				lru_cache_add_active(dst_page);
++				page_add_anon_rmap(dst_page, vma, address);
++				src_page ++;
++				page_table ++;
++				address += PAGE_SIZE;
++			}
++			pte_is_ok = 1;
++		}
++	}
++	huge_pte_unmap(huge_pte);
++	if(pte_is_ok)
++		put_huge_page(old_page);
++	else {
++		if(new_page)
++			put_huge_page(new_page);
++		else {
++			for(i=0; i<HUGE_PAGE_SIZE/PAGE_SIZE; i++)
++				page_cache_release(new_pages[i]);
++		}
++	}
++	put_huge_page(old_page);
++	spin_unlock(&mm->page_table_lock);
++	return VM_FAULT_MINOR;
++
++no_new_page:
++	HUGE_PAGE_DEBUG_EX(("Error: no_new_page on do_wp_huge_page\n"))
++	put_huge_page(old_page);
++	return VM_FAULT_OOM;
++}
++#endif
++
+ /*
+  * This routine handles present pages, when users try to write
+  * to a shared page. It is done by copying the page to a new address
+@@ -1247,6 +1510,7 @@
+ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct * vma,
+ 	unsigned long address, pte_t *page_table, pmd_t *pmd, pte_t pte)
+ {
++	//HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: wp_page: addr=0x%08x, vma=0x%08x->0x%08x, ppte=0x%08x, ppmd=0x%08x, pte=0x%08x, vmfile=0x%08x\n", current->pid, current->comm, address, vma->vm_start, vma->vm_end, page_table, pmd, pte, vma->vm_file))
+ 	struct page *old_page, *new_page;
+ 	unsigned long pfn = pte_pfn(pte);
+ 	pte_t entry;
+@@ -1310,6 +1574,7 @@
+ 		int reuse = can_share_swap_page(old_page);
+ 		unlock_page(old_page);
+ 		if (reuse) {
++			//HUGE_PAGE_DEBUG_EX(("\treuse page count: %d\n", page_count(old_page)))
+ 			flush_cache_page(vma, address, pfn);
+ 			entry = maybe_mkwrite(pte_mkyoung(pte_mkdirty(pte)),
+ 					      vma);
+@@ -1369,6 +1634,7 @@
+ 	return VM_FAULT_MINOR;
+ 
+ no_new_page:
++	HUGE_PAGE_DEBUG_EX(("Error: no_new_page on do_wp_page"))
+ 	page_cache_release(old_page);
+ 	return VM_FAULT_OOM;
+ }
+@@ -1704,6 +1970,7 @@
+ 	swp_entry_t entry = pte_to_swp_entry(orig_pte);
+ 	pte_t pte;
+ 	int ret = VM_FAULT_MINOR;
++	HUGE_PAGE_DEBUG
+ 
+ 	pte_unmap(page_table);
+ 	spin_unlock(&mm->page_table_lock);
+@@ -1792,6 +2059,78 @@
+ 	goto out;
+ }
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++/*
++ * Similar with do_anonymous_page().
++ * Huge page mapping support. 
++ */
++static int
++do_anonymous_huge_page(struct mm_struct *mm, struct vm_area_struct *vma,
++		pte_t *page_table, pmd_t *pmd, int write_access,
++		unsigned long addr)
++{
++	int i;
++	pte_t entry;
++	struct page *page;
++	struct page *huge_page;
++	unsigned long huge_addr;
++	
++	HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: anony_huge: addr=0x%08x\n", 
++		current->pid, current->comm, addr))
++	if(adjust_huge_pte_addr(pmd, &page_table, &addr))
++		return VM_FAULT_OOM;
++	huge_addr = addr;
++	
++	/* Allocate our own private page. */
++	huge_pte_unmap(page_table);
++	spin_unlock(&mm->page_table_lock);
++
++	if (unlikely(anon_vma_prepare(vma)))
++		goto no_mem;
++	huge_page = alloc_huge_page_vma(GFP_HIGHUSER | __GFP_NOWARN, vma, addr);
++	if (!huge_page)
++		goto no_mem;
++	page = huge_page;
++	for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--) {
++		clear_user_highpage(page, addr);
++
++		page ++;
++		addr += PAGE_SIZE;
++	}
++
++	addr = huge_addr;
++	page = huge_page;
++	spin_lock(&mm->page_table_lock);
++	for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--) {
++		if (!pte_none(*page_table)) {
++			pte_unmap(page_table);
++			put_huge_page(huge_page);
++			spin_unlock(&mm->page_table_lock);
++			return VM_FAULT_MINOR;
++		}
++
++		inc_mm_counter(mm, rss);
++		entry = pte_mkhuge(maybe_mkwrite(pte_mkdirty(mk_pte(page, vma->vm_page_prot)), 
++			vma));
++		SetPageReferenced(page);
++		page_add_anon_rmap(page, vma, addr);
++		set_pte_at(mm, addr, page_table, entry);
++		pte_unmap(page_table);
++		update_mmu_cache(vma, addr, entry);
++		lazy_mmu_prot_update(entry);
++
++		addr += PAGE_SIZE;
++		page ++;
++		page_table ++;
++	}
++	spin_unlock(&mm->page_table_lock);
++	return VM_FAULT_MINOR;
++no_mem:
++	HUGE_PAGE_DEBUG_EX(("Error: no_mem on do_anonymous_huge_page\n"))
++	return VM_FAULT_OOM;
++}
++#endif
++
+ /*
+  * We are called with the MM semaphore and page_table_lock
+  * spinlock held to protect against concurrent faults in
+@@ -1873,10 +2212,27 @@
+ 	unsigned int sequence = 0;
+ 	int ret = VM_FAULT_MINOR;
+ 	int anon = 0;
++	int error;
+ 
+-	if (!vma->vm_ops || !vma->vm_ops->nopage)
++	//HUGE_PAGE_DEBUG
++	if (!vma->vm_ops || !vma->vm_ops->nopage) {
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++		if(vma->vm_flags & VM_HUGEPAGE) {
++			/* Try huge-page mapping first */
++			if(do_anonymous_huge_page(mm, vma, page_table, pmd, write_access, address) 
++				== VM_FAULT_MINOR)
++				return VM_FAULT_MINOR;
++
++			HUGE_PAGE_DEBUG_EX(("Warn: do_anon_huge_page failed: addr=0x%08x\n", address))
++			/* Disable current huge-page mapping if no huge-page memory temporarily */
++			error = mhugepage_fixup(vma, address);
++			if(error)
++				return error;
++		}
++#endif
+ 		return do_anonymous_page(mm, vma, page_table,
+ 					pmd, write_access, address);
++	}
+ 	pte_unmap(page_table);
+ 	spin_unlock(&mm->page_table_lock);
+ 
+@@ -1896,6 +2252,8 @@
+ 	 * after the next truncate_count read.
+ 	 */
+ 
++	//if (new_page == NOPAGE_SIGBUS || new_page == NOPAGE_OOM)
++		//printk("Error: new_page = 0x%08x\n", new_page);
+ 	/* no page was available -- either SIGBUS or OOM */
+ 	if (new_page == NOPAGE_SIGBUS)
+ 		return VM_FAULT_SIGBUS;
+@@ -1974,6 +2332,7 @@
+ out:
+ 	return ret;
+ oom:
++	HUGE_PAGE_DEBUG_EX(("Error: do_no_page\n"))
+ 	page_cache_release(new_page);
+ 	ret = VM_FAULT_OOM;
+ 	goto out;
+@@ -2040,7 +2399,9 @@
+ 	int write_access, pte_t *pte, pmd_t *pmd)
+ {
+ 	pte_t entry;
++	int i;
+ 
++	//HUGE_PAGE_DEBUG
+ 	entry = *pte;
+ 	if (!pte_present(entry)) {
+ 		/*
+@@ -2056,11 +2417,42 @@
+ 	}
+ 
+ 	if (write_access) {
+-		if (!pte_write(entry))
++		if (!pte_write(entry)) {
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++			if(vma->vm_flags & VM_HUGEPAGE) {
++				/* Try huge-page mapping first */
++				return do_wp_huge_page(mm, vma, address, pte, pmd, entry);
++			}
++#endif
+ 			return do_wp_page(mm, vma, address, pte, pmd, entry);
++		}
+ 
+ 		entry = pte_mkdirty(entry);
+ 	}
++	
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++	if(vma->vm_flags & VM_HUGEPAGE) {
++		if(adjust_huge_pte_addr(pmd, &pte, &address))
++			return VM_FAULT_OOM;
++			
++		for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--) {
++			entry = *pte;
++			if(write_access)
++				entry = pte_mkdirty(entry);
++			entry = pte_mkyoung(entry);
++			ptep_set_access_flags(vma, address, pte, entry, write_access);
++			update_mmu_cache(vma, address, entry);
++			lazy_mmu_prot_update(entry);
++			pte_unmap(pte);
++
++			pte ++;
++			address += PAGE_SIZE;
++		}
++		spin_unlock(&mm->page_table_lock);
++		return VM_FAULT_MINOR;
++	}
++#endif
++
+ 	entry = pte_mkyoung(entry);
+ 	ptep_set_access_flags(vma, address, pte, entry, write_access);
+ 	update_mmu_cache(vma, address, entry);
+@@ -2081,6 +2473,7 @@
+ 	pmd_t *pmd;
+ 	pte_t *pte;
+ 
++	//HUGE_PAGE_DEBUG
+ 	__set_current_state(TASK_RUNNING);
+ 
+ 	inc_page_state(pgfault);
+@@ -2110,6 +2503,8 @@
+ 	return handle_pte_fault(mm, vma, address, write_access, pte, pmd);
+ 
+  oom:
++ 	HUGE_PAGE_DEBUG_EX(("Error: pgd=0x%08x, pud=0x%08x, pmd=0x%08x, pte=0x%08x\n", 
++		pgd, pud, pmd, pte))
+ 	spin_unlock(&mm->page_table_lock);
+ 	return VM_FAULT_OOM;
+ }
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/mm/mlock.c linux.noL2.hp2/mm/mlock.c
+--- linux.noL2/mm/mlock.c	2006-05-30 10:24:02.000000000 +0800
++++ linux.noL2.hp2/mm/mlock.c	2006-06-16 19:43:34.593256920 +0800
+@@ -95,6 +95,15 @@
+ 
+ 		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++		if(vma->vm_flags & VM_HUGEPAGE) {
++			HUGE_PAGE_DEBUG_EX(("mlock huge: start=0x%08x, len=0x%08x\n", start, len))
++			nstart &= HUGE_PAGE_MASK;
++			len = HUGE_PAGE_ALIGN(len);
++			end = HUGE_PAGE_ALIGN(end);
++		}
++#endif
++
+ 		newflags = vma->vm_flags | VM_LOCKED;
+ 		if (!on)
+ 			newflags &= ~VM_LOCKED;
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/mm/mmap.c linux.noL2.hp2/mm/mmap.c
+--- linux.noL2/mm/mmap.c	2006-05-30 10:24:02.000000000 +0800
++++ linux.noL2.hp2/mm/mmap.c	2006-06-16 19:45:05.391453496 +0800
+@@ -216,13 +216,25 @@
+ 
+ 	if (brk < mm->end_code)
+ 		goto out;
+-	newbrk = PAGE_ALIGN(brk);
++
++#ifdef HUGE_PAGE_BRK
++	oldbrk = HUGE_PAGE_ALIGN(mm->brk);
++	newbrk = HUGE_PAGE_ALIGN(brk);
++#else
+ 	oldbrk = PAGE_ALIGN(mm->brk);
++	newbrk = PAGE_ALIGN(brk);
++#endif
++
++	HUGE_PAGE_DEBUG_EX(("sys_brk: brk=0x%08x, old=0x%08x, new=0x%08x\n", 
++		brk, oldbrk, newbrk))
++
+ 	if (oldbrk == newbrk)
+ 		goto set_brk;
+ 
+ 	/* Always allow shrinking brk. */
+ 	if (brk <= mm->brk) {
++		HUGE_PAGE_DEBUG_EX(("shrinking sys_brk(old=0x%08x, new=0x%08x, brk=0x%08x\n", 
++			oldbrk, newbrk, brk))
+ 		if (!do_munmap(mm, newbrk, oldbrk-newbrk))
+ 			goto set_brk;
+ 		goto out;
+@@ -238,8 +250,13 @@
+ 		goto out;
+ 
+ 	/* Ok, looks good - let it rip. */
++#ifdef HUGE_PAGE_BRK
++	if (do_huge_brk(oldbrk, newbrk-oldbrk) != oldbrk)
++#else
+ 	if (do_brk(oldbrk, newbrk-oldbrk) != oldbrk)
++#endif
+ 		goto out;
++
+ set_brk:
+ 	mm->brk = brk;
+ out:
+@@ -868,6 +885,11 @@
+ 			unsigned long len, unsigned long prot,
+ 			unsigned long flags, unsigned long pgoff)
+ {
++#ifdef HUGE_PAGE_ANON_MMAP
++	unsigned long vm_is_huge = 0;
++	unsigned long huge_addr;
++#endif
++
+ 	struct mm_struct * mm = current->mm;
+ 	struct vm_area_struct * vma, * prev;
+ 	struct inode *inode;
+@@ -918,10 +940,32 @@
+ 	/* Obtain the address to map to. we verify (or select) it and ensure
+ 	 * that it represents a valid section of the address space.
+ 	 */
++#ifdef HUGE_PAGE_ANON_MMAP
++	if((!file) && (flags & MAP_ANONYMOUS) && (len >= HUGE_PAGE_SIZE))
++		vm_is_huge = VM_HUGEPAGE | VM_RESERVED;
++	if(vm_is_huge) {
++		huge_addr = get_unmapped_huge_area(file, addr, len, pgoff, flags);
++		if(huge_addr & ~HUGE_PAGE_MASK)
++			vm_is_huge = 0;
++		else {
++			HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: do_mmap: addr=0x%08x, len=0x%08x->0x%08x\n",
++				current->pid, current->comm, huge_addr, len, HUGE_PAGE_ALIGN(len)))
++			addr = huge_addr;
++			len = HUGE_PAGE_ALIGN(len);
++		}
++	}
++
++	if(!vm_is_huge) {
++#endif
++
+ 	addr = get_unmapped_area(file, addr, len, pgoff, flags);
+ 	if (addr & ~PAGE_MASK)
+ 		return addr;
+ 
++#ifdef HUGE_PAGE_ANON_MMAP
++	}
++#endif
++
+ 	/* Do simple checking here so the lower-level routines won't have
+ 	 * to. we assume access permissions have been handled by the open
+ 	 * of the memory object, so we don't do any here.
+@@ -929,6 +973,10 @@
+ 	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
+ 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+ 
++#ifdef HUGE_PAGE_ANON_MMAP
++	vm_flags |= vm_is_huge;
++#endif
++
+ 	if (flags & MAP_LOCKED) {
+ 		if (!can_do_mlock())
+ 			return -EPERM;
+@@ -1298,6 +1346,27 @@
+ 		area->vm_mm->free_area_cache = area->vm_mm->mmap_base;
+ }
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++unsigned long
++get_unmapped_huge_area(struct file *file, unsigned long addr, unsigned long len,
++		unsigned long pgoff, unsigned long flags)
++{
++	if (flags & MAP_FIXED) {
++		if (addr > TASK_SIZE - len)
++			return -ENOMEM;
++		if (addr & ~HUGE_PAGE_MASK)
++			return -EINVAL;
++		if (len & ~HUGE_PAGE_MASK)
++			return -EINVAL;
++		return addr;
++	}
++
++	return arch_get_unmapped_huge_area(file, addr, len, pgoff, flags);
++}
++
++EXPORT_SYMBOL(get_unmapped_huge_area);
++#endif
++
+ unsigned long
+ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
+ 		unsigned long pgoff, unsigned long flags)
+@@ -1737,6 +1806,17 @@
+ 		return 0;
+ 	/* we have  start < vma->vm_end  */
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++	/* deal with those mmap'ed huge pages */
++	if((vma->vm_flags) & VM_HUGEPAGE) {
++		HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: munmap huge: start=0x%08x, len=0x%08x\n", 
++			current, current->comm, start, len))
++		HUGE_PAGE_DEBUG_EX(("\tvma = 0x%08x --> 0x%08x\n", vma->vm_start, vma->vm_end))
++		start &= HUGE_PAGE_MASK;
++		len = HUGE_PAGE_ALIGN(len);
++	}
++#endif
++
+ 	/* if it doesn't overlap, we have nothing.. */
+ 	end = start + len;
+ 	if (vma->vm_start >= end)
+@@ -1802,6 +1882,104 @@
+ #endif
+ }
+ 
++#ifdef HUGE_PAGE_BRK
++/*
++ * Similar with do_brk()
++ * This function is called by sys_brk() only with "addr" & "len" 
++ * both HUGE_PAGE_ALIGN'ed. 
++ */
++unsigned long do_huge_brk(unsigned long addr, unsigned long len)
++{
++	struct mm_struct * mm = current->mm;
++	struct vm_area_struct * vma, * prev;
++	unsigned long flags;
++	struct rb_node ** rb_link, * rb_parent;
++	pgoff_t pgoff = addr >> PAGE_SHIFT;
++	
++	HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: huge_brk: addr=0x%08x, len=0x%08x\n", 
++		current->pid, current->comm, addr, len))
++
++	if ((addr + len) > TASK_SIZE || (addr + len) < addr)
++		return -EINVAL;
++
++	/*
++	 * mlock MCL_FUTURE?
++	 */
++	if (mm->def_flags & VM_LOCKED) {
++		unsigned long locked, lock_limit;
++		locked = len >> PAGE_SHIFT;
++		locked += mm->locked_vm;
++		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
++		lock_limit >>= PAGE_SHIFT;
++		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
++			return -EAGAIN;
++	}
++
++	/*
++	 * mm->mmap_sem is required to protect against another thread
++	 * changing the mappings in case we sleep.
++	 */
++	verify_mm_writelocked(mm);
++
++	/*
++	 * Clear old maps.  this also does some error checking for us
++	 */
++ munmap_back:
++	vma = find_vma_prepare(mm, addr, &prev, &rb_link, &rb_parent);
++	if (vma && vma->vm_start < addr + len) {
++		HUGE_PAGE_DEBUG_EX(("munmap(addr=0x%08x, len=0x%08x) at do_huge_brk", addr, len))
++		if (do_munmap(mm, addr, len))
++			return -ENOMEM;
++		goto munmap_back;
++	}
++
++	/* Check against address space limits *after* clearing old maps... */
++	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
++		return -ENOMEM;
++
++	if (mm->map_count > sysctl_max_map_count)
++		return -ENOMEM;
++
++	if (security_vm_enough_memory(len >> PAGE_SHIFT))
++		return -ENOMEM;
++
++	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags | VM_HUGEPAGE | VM_RESERVED;
++
++	/* Can we just expand an old private anonymous mapping? */
++	if (vma_merge(mm, prev, addr, addr + len, flags,
++					NULL, NULL, pgoff, NULL))
++		goto out;
++
++	/*
++	 * create a vma struct for an anonymous mapping
++	 */
++	vma = kmem_cache_alloc(vm_area_cachep, SLAB_KERNEL);
++	if (!vma) {
++		vm_unacct_memory(len >> PAGE_SHIFT);
++		return -ENOMEM;
++	}
++	memset(vma, 0, sizeof(*vma));
++
++	vma->vm_mm = mm;
++	vma->vm_start = addr;
++	vma->vm_end = addr + len;
++	vma->vm_pgoff = pgoff;
++	vma->vm_flags = flags;
++	vma->vm_page_prot = protection_map[flags & 0x0f];
++	vma_link(mm, vma, prev, rb_link, rb_parent);
++out:
++	mm->total_vm += len >> PAGE_SHIFT;
++	if (flags & VM_LOCKED) {
++		mm->locked_vm += len >> PAGE_SHIFT;
++		make_pages_present(addr, addr + len);
++	}
++make_pages_present(addr, addr + len);
++	return addr;
++}
++
++EXPORT_SYMBOL(do_huge_brk);
++#endif
++
+ /*
+  *  this is really a simplified "do_mmap".  it only handles
+  *  anonymous maps.  eventually we may be able to do some
+@@ -1905,6 +2083,8 @@
+ 	unsigned long nr_accounted = 0;
+ 	unsigned long end;
+ 
++	HUGE_PAGE_DEBUG_EX(("0x%08x[%8s]: exit_mmap\n", current->pid, current->comm))
++
+ 	lru_add_drain();
+ 
+ 	spin_lock(&mm->page_table_lock);
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/mm/mprotect.c linux.noL2.hp2/mm/mprotect.c
+--- linux.noL2/mm/mprotect.c	2006-05-30 10:24:02.000000000 +0800
++++ linux.noL2.hp2/mm/mprotect.c	2006-06-16 19:44:06.060473176 +0800
+@@ -241,6 +241,15 @@
+ 
+ 		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++		if(vma->vm_flags & VM_HUGEPAGE) {
++			HUGE_PAGE_DEBUG_EX(("mprot huge: start=0x%08x, len=0x%08x\n", start, len))
++			nstart &= HUGE_PAGE_MASK;
++			len = HUGE_PAGE_ALIGN(len);
++			end = HUGE_PAGE_ALIGN(end);
++		}
++#endif
++
+ 		if (is_vm_hugetlb_page(vma)) {
+ 			error = -EACCES;
+ 			goto out;
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/mm/mremap.c linux.noL2.hp2/mm/mremap.c
+--- linux.noL2/mm/mremap.c	2006-05-30 10:24:02.000000000 +0800
++++ linux.noL2.hp2/mm/mremap.c	2006-06-16 19:44:46.811278112 +0800
+@@ -269,6 +269,10 @@
+ 	unsigned long ret = -EINVAL;
+ 	unsigned long charged = 0;
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++	unsigned long vm_is_huge;
++#endif
++
+ 	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE))
+ 		goto out;
+ 
+@@ -332,6 +336,20 @@
+ 	vma = find_vma(current->mm, addr);
+ 	if (!vma || vma->vm_start > addr)
+ 		goto out;
++
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++	vm_is_huge = vma->vm_flags & VM_HUGEPAGE;
++	if (vm_is_huge) {
++		HUGE_PAGE_DEBUG_EX(("mremap huge: addr=0x%08x\n", addr));
++		if(addr & ~HUGE_PAGE_MASK) {
++			ret = -EINVAL;
++			goto out;
++		}
++		old_len = HUGE_PAGE_ALIGN(old_len);
++		new_len = HUGE_PAGE_ALIGN(new_len);
++	}
++#endif
++
+ 	if (is_vm_hugetlb_page(vma)) {
+ 		ret = -EINVAL;
+ 		goto out;
+@@ -403,6 +421,12 @@
+ 			if (vma->vm_flags & VM_MAYSHARE)
+ 				map_flags |= MAP_SHARED;
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++			if(vm_is_huge)
++				new_addr = get_unmapped_huge_area(vma->vm_file, 0, new_len, vma->vm_pgoff, map_flags);
++			else
++#endif
++
+ 			new_addr = get_unmapped_area(vma->vm_file, 0, new_len,
+ 						vma->vm_pgoff, map_flags);
+ 			ret = new_addr;
+diff -urbN --exclude-from=/home/lli5/script/kernel-dontdiff linux.noL2/mm/page_alloc.c linux.noL2.hp2/mm/page_alloc.c
+--- linux.noL2/mm/page_alloc.c	2006-05-30 10:24:02.000000000 +0800
++++ linux.noL2.hp2/mm/page_alloc.c	2006-06-16 19:46:47.924866048 +0800
+@@ -914,6 +914,74 @@
+ 
+ EXPORT_SYMBOL(__alloc_pages);
+ 
++#ifdef HUGE_PAGE_MEMORY_MANAGEMENT
++/*
++ * Similar with alloc_pages().
++ * Ensure pages HUGE_PAGE_ALIGN'ed.
++ */
++struct page * fastcall __alloc_huge_page(unsigned int gfp)
++{
++	int i;
++	struct page *page, *end, *free, *aligned_page;
++	dma_addr_t dma_addr, aligned_dma;
++	unsigned long aligned_off;
++
++	page = alloc_pages(gfp, HUGE_PAGE_ORDER);
++	if (!page)
++		goto no_page;
++
++	dma_addr = page_to_phys(page);
++
++	if (dma_addr & ~HUGE_PAGE_MASK) {	// realloc memory
++		__free_pages(page, HUGE_PAGE_ORDER);
++		/* Allocate aditional 64KB memory, in order 
++		 * to align memory to 64KB boundary. 
++		 * Unused pages will be freed */
++		page = alloc_pages(gfp, HUGE_PAGE_ORDER + 1);
++		if (!page)
++			goto no_page;
++
++		dma_addr = page_to_phys(page);
++
++		aligned_dma = HUGE_PAGE_ALIGN(dma_addr);
++		aligned_off = aligned_dma - dma_addr;
++
++		/* Free unused 64KB pages, 2 parts in total */
++		aligned_page = virt_to_page(__va(dma_addr + aligned_off)); 
++
++		free = aligned_page + (HUGE_PAGE_SIZE >> PAGE_SHIFT);
++		end  = page + (1 << (HUGE_PAGE_ORDER + 1));
++
++		for (; page < aligned_page; page++) {
++			set_page_count(page, 1);
++			__free_page(page);
++		}
++		for (; page < free; page++) {
++			set_page_count(page, 1);
++		}
++		for (; page < end; page++) {
++			set_page_count(page, 1);
++			__free_page(page);
++		}
++	}
++	else {
++		aligned_page = page;
++		for(i=HUGE_PAGE_SIZE/PAGE_SIZE; i>0; i--) {
++			set_page_count(page, 1);
++			page ++;
++		}
++	}
++	
++	return aligned_page;
++
++no_page:
++	HUGE_PAGE_DEBUG_EX(("alloc_huge_page: no_page.\n"))
++	return NULL;
++}
++
++EXPORT_SYMBOL(__alloc_huge_page);
++#endif
++
+ /*
+  * Common helper functions.
+  */

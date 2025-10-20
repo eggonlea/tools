@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Android Studio
+Comment=Launch Android Studio
+Icon=/home/user/android-studio/bin/studio.svg
+Exec=/home/user/android-studio/bin/studio
+Type=Application

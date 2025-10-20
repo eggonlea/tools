@@ -1,0 +1,1 @@
+../bin/ubuntu_reinstall_all.sh

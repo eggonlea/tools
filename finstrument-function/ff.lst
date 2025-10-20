@@ -1,0 +1,10 @@
+0x4006cc main main.c:24
+0x7ff451292830 ?? ??:0
+0x40066a c main.c:14
+0x400700 main main.c:27 (discriminator 3)
+0x400627 b main.c:9
+0x4006ab c main.c:18
+0x4005d6 a main.c:2
+0x40064e b main.c:10
+0x400697 c main.c:16
+0x400606 a main.c:4

@@ -1,0 +1,47 @@
+1. Build
+
+Prerequisites: please ensure the essential compiling tools and the correct
+linux source package is installed. Make sure CONFIG_KPROBE is enabled.
+
+Assuming linux sources are installed at default paths via "apt-get install",
+type "make" in this dir to compile the module.
+
+2. Usage
+
+$ insmod profiler.ko funcs=<func_name[,...]>
+
+E.g. $ sudo insmod profiler.ko funcs=sys_getpid,sys_clone
+
+Currently the module supports up to 128 functions. Invalid function name will
+be ignored. If no valid function is provided, the module just does nothing.
+
+3. Output
+
+Please simply read /sys/class/kprobesys/profiler/stats to get the output, with the
+following format:
+
+<symbol name>:<averagfe time per call  in ns>:<invocations>
+
+E.g. $ cat /sys/class/kprobesys/profiler/stat
+sys_getpid:8431:2
+sys_clone:221378:63
+
+4. TODOs
+
+The code doesn't deal with any possible overflow values, although generally
+it's not a real concern for daily debugging purpose. It should take a really
+long time to hit the issue.
+
+This version doesn't detect duplicate functions. In case any functions are
+provided in the parameter list more than once, only one of them will take
+effect, and the others just simply do nothing.
+
+Any missed events will be reported when the module exits (during rmmod).
+
+E.g. $ sudo rmmod profiler
+[17423.998160] sys_select (c1187030) missed 78 times
+
+Tested under Ubuntu 12.04.4 (i386) with Linux kenrel 3.11.0-15, as well as
+Ubuntu 15.10 (amd64) with Linux kenrel 4.2.0-30, but it should work on all
+major Linux distributions.
+

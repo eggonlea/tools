@@ -1,0 +1,5 @@
+adbroot.sh
+adb disable-verity
+adb reboot "dm-verity enforcing"
+adbroot.sh
+adb remount

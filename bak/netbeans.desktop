@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Netbeans
+Comment=Apache Netbeans IDE 10.0
+Icon=/srv/netbeans/nb/netbeans.icns
+Exec=/srv/netbeans/bin/netbeans
+Type=Application
+StartupWMClass=Apache NetBeans IDE 10.0

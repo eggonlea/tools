@@ -1,0 +1,46 @@
+main main.c:24 <- ?? ??:0 {
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+  b main.c:9 <- c main.c:18 {
+   a main.c:2 <- b main.c:10 {
+   } a main.c:2 -> b main.c:10
+  } b main.c:9 -> c main.c:18
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+  b main.c:9 <- c main.c:18 {
+   a main.c:2 <- b main.c:10 {
+   } a main.c:2 -> b main.c:10
+  } b main.c:9 -> c main.c:18
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+  b main.c:9 <- c main.c:18 {
+   a main.c:2 <- b main.c:10 {
+   } a main.c:2 -> b main.c:10
+  } b main.c:9 -> c main.c:18
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+  a main.c:2 <- c main.c:16 {
+   a main.c:2 <- a main.c:4 {
+   } a main.c:2 -> a main.c:4
+  } a main.c:2 -> c main.c:16
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+  a main.c:2 <- c main.c:16 {
+   a main.c:2 <- a main.c:4 {
+    a main.c:2 <- a main.c:4 {
+    } a main.c:2 -> a main.c:4
+   } a main.c:2 -> a main.c:4
+  } a main.c:2 -> c main.c:16
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+ c main.c:14 <- main main.c:27 (discriminator 3) {
+  a main.c:2 <- c main.c:16 {
+   a main.c:2 <- a main.c:4 {
+    a main.c:2 <- a main.c:4 {
+     a main.c:2 <- a main.c:4 {
+     } a main.c:2 -> a main.c:4
+    } a main.c:2 -> a main.c:4
+   } a main.c:2 -> a main.c:4
+  } a main.c:2 -> c main.c:16
+ } c main.c:14 -> main main.c:27 (discriminator 3)
+} main main.c:24 -> ?? ??:0

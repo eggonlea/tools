@@ -1,0 +1,9 @@
+obj-m := profiler.o
+
+KDIR := /home/lli5/server_tree/rel-24_foster/git/out/target/product/t210/obj/KERNEL
+
+default:
+	$(MAKE) ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- -C $(KDIR) SUBDIRS=`pwd` modules
+
+clean:
+	$(MAKE) -C $(KDIR) SUBDIRS=`pwd` clean

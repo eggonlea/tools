@@ -1,0 +1,15 @@
+cc_binary {
+	name: "busyloop",
+	srcs: ["busyloop.c"],
+}
+
+cc_binary {
+	name: "pagefault_traversal",
+	srcs: ["pagefault_traversal.c"],
+	cflags: [
+		"-Wall",
+		"-Wextra",
+		"-Werror",
+		"-Wno-unused-parameter",
+	],
+}

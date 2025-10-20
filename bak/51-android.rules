@@ -1,0 +1,70 @@
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1949", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0666", OWNER="amznlili"
+# adb protocol on passion (Nexus One)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4e12", MODE="0666", OWNER="amznlili"
+# fastboot protocol on passion (Nexus One)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bb4", ATTR{idProduct}=="0fff", MODE="0666", OWNER="amznlili"
+# adb protocol on crespo/crespo4g (Nexus S)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4e22", MODE="0666", OWNER="amznlili"
+# fastboot protocol on crespo/crespo4g (Nexus S)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4e20", MODE="0666", OWNER="amznlili"
+# adb protocol on stingray/wingray (Xoom)
+SUBSYSTEM=="usb", ATTR{idVendor}=="22b8", ATTR{idProduct}=="70a9", MODE="0666", OWNER="amznlili"
+# fastboot protocol on stingray/wingray (Xoom)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="708c", MODE="0666", OWNER="amznlili"
+# adb protocol on maguro/toro (Galaxy Nexus)
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="6860", MODE="0666", OWNER="amznlili"
+# fastboot protocol on maguro/toro (Galaxy Nexus)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4e30", MODE="0666", OWNER="amznlili"
+# adb protocol on panda (PandaBoard)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0451", ATTR{idProduct}=="d101", MODE="0666", OWNER="amznlili"
+# adb protocol on panda (PandaBoard ES)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d002", MODE="0666", OWNER="amznlili"
+# fastboot protocol on panda (PandaBoard)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0451", ATTR{idProduct}=="d022", MODE="0666", OWNER="amznlili"
+# usbboot protocol on panda (PandaBoard)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0451", ATTR{idProduct}=="d00f", MODE="0666", OWNER="amznlili"
+# usbboot protocol on panda (PandaBoard ES)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0451", ATTR{idProduct}=="d010", MODE="0666", OWNER="amznlili"
+# adb protocol on grouper/tilapia (Nexus 7)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4e42", MODE="0666", OWNER="amznlili"
+# fastboot protocol on grouper/tilapia (Nexus 7)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4e40", MODE="0666", OWNER="amznlili"
+# adb protocol on manta (Nexus 10)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee2", MODE="0666", OWNER="amznlili"
+# fastboot protocol on manta (Nexus 10)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee0", MODE="0666", OWNER="amznlili"
+# adb protocol on hammerhead (Nexus 5)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee1", MODE="0666", OWNER="amznlili"
+# Q 05c6:9091
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", ATTR{idProduct}=="9091", MODE="0666", OWNER="amznlili"
+# Q fastboot
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0666", OWNER="amznlili"
+# Q rndis
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", ATTR{idProduct}=="9024", MODE="0666", OWNER="amznlili"
+# UVC (temp)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="6666", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="8888", MODE="0666", OWNER="amznlili"
+# UVC (Essential)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", ATTR{idProduct}=="6666", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", ATTR{idProduct}=="8888", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", ATTR{idProduct}=="8886", MODE="0666", OWNER="amznlili"
+# Shio (Essential)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", ATTR{idProduct}=="a004", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", ATTR{idProduct}=="a005", MODE="0666", OWNER="amznlili"
+# recovery (MATA)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d001", MODE="0666", OWNER="amznlili"
+# FTDI FT601
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="601f", MODE="0666", OWNER="amznlili"
+# Q 8053 r12
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", ATTR{idProduct}=="90cb", MODE="0666", OWNER="amznlili"
+# Q MATA DIAG
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", ATTR{idProduct}=="901d", MODE="0666", OWNER="amznlili"
+# Tiger tail
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="5027", MODE="0666", OWNER="amznlili"
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee7", MODE="0666", OWNER="amznlili"
+# MATA
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e17", ATTR{idProduct}=="c032", MODE="0666", OWNER="amznlili"

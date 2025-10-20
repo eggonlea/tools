@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Setup Workspace
+Comment=Automatically set up workspace
+Icon=/home/user/vobs/github/eggonlea/tools/bak/setenv.png
+Exec=/home/user/.local/bin/setenv.sh
+Type=Application

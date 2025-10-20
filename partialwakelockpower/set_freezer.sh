@@ -1,0 +1,1 @@
+/home/dualli/work/freezer/set_freezer.sh

@@ -1,0 +1,18 @@
+adb reboot bootloader
+fastboot flash bootloader $OUT/bootloader.img
+
+fastboot reboot bootloader
+fastboot flash boot $OUT/boot.img
+fastboot flash dtbo $OUT/dtbo.img
+fastboot flash vbmeta $OUT/vbmeta.img
+fastboot flash vbmeta_system $OUT/vbmeta_system.img
+fastboot flash vendor_boot $OUT/vendor_boot
+
+fastboot reboot fastboot
+fastboot flash product $OUT/product.img
+fastboot flash system $OUT/system.img
+fastboot flash system_ext $OUT/system_ext.img
+fastboot flash vendor $OUT/vendor.img
+
+fastboot reboot
+adbroot.sh

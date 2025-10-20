@@ -1,0 +1,20 @@
+0x4006cc main at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:24
+
+0x7ff451292830 ?? ??:0
+
+0x40066a c at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:14
+
+0x400700 main at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:27 (discriminator 3)
+
+0x400627 b at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:9
+
+0x4006ab c at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:18
+
+0x4005d6 a at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:2
+
+0x40064e b at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:10
+
+0x400697 c at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:16
+
+0x400606 a at /home/li/vobs/eggonlea.github.com/tools/finstrument-function/main.c:4
+

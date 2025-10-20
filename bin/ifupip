@@ -1,0 +1,12 @@
+#!/bin/sh
+
+OLD=`cat /tmp/ifupip 2> /dev/null`
+IP=`ifconfig eno1 2> /dev/null | awk '/inet addr/{print substr($2,6)}'`
+if [ "$IP" = "$OLD" ]
+then
+	echo "Keep using IP $IP"
+else
+	echo $IP > /tmp/ifupip
+	/home/li/bin/sendgmail.py -t '"Li Li"<li@essential.com>' -s "new IP $IP" -m "old IP $OLD"
+fi
+echo Done

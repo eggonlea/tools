@@ -1,0 +1,3 @@
+ssh-agent -k
+mkdir -p ${SSH_AUTH_SOCK%/*}
+eval $(ssh-agent -a "${SSH_AUTH_SOCK}")

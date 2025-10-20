@@ -1,0 +1,66 @@
+
+# Unison preferences file
+
+# Have ssh do compression
+sshargs = -C
+
+# Root direction (from laptop)
+#root = /
+
+# Paths to sync
+# path = bin
+
+# Use this command for displaying diffs
+diff = diff -y -W 79 --suppress-common-lines
+
+# Default actions
+auto = true
+
+# Ignore these
+ignore = Name *~
+ignore = Name #*
+ignore = Name *.runfiles
+ignore = Name *.aux
+ignore = Name *.log
+ignore = Name .Wastebasket
+ignore = Name blaze-*
+ignore = Name *.pyc
+ignore = Name .cups
+ignore = Name .nfs*
+ignore = Name ._*
+ignore = Name .DS_Store
+ignore = Name *.o
+ignore = Name *.a
+ignore = Name *.so
+ignore = Name core
+ignore = Name Downloads
+ignore = Name tmp
+ignore = Name vobs
+ignore = Name images
+ignore = Name *.img
+ignore = Name Android
+ignore = Name AndroidStudioProjects
+ignore = Name Downloads
+ignore = Name Desktop
+ignore = Name images
+ignore = Name shield
+ignore = Name restore
+ignore = Name drivefs
+ignore = Name bugs
+ignore = Regex /google3/blaze-
+ignore = Name cuttlefish
+ignore = Name cuttlefish_runtime*
+ignore = Name cuttlefish_assembly
+
+# Ignore all dot files other than the ones specified.
+ignore = Path .*
+
+# Don't ignore these
+ignorenot = Name .bash_logout
+ignorenot = Name .bashrc
+ignorenot = Name .bash_profile
+ignorenot = Name .gitconfig
+ignorenot = Name .gitignore
+ignorenot = Name .repo_.gitconfig.json
+ignorenot = Name .unison/default.prf
+ignorenot = Name .vimrc

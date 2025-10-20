@@ -1,0 +1,7 @@
+obj-m := profiler.o
+
+default:
+	$(MAKE) -C /lib/modules/`uname -r`/build SUBDIRS=`pwd` modules
+
+clean:
+	$(MAKE) -C /lib/modules/`uname -r`/build SUBDIRS=`pwd` clean

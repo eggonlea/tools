@@ -1,0 +1,38 @@
+# extra bashrc: executed by ~/.bashrc
+# ln -s ./bash_aliases ~/.bash_aliases
+
+export PATH=~/Android/Sdk/platform-tools:$PATH
+
+# Build Android
+export USE_CCACHE=1
+export CCACHE_DIR=~/.ccache
+
+# byobu-prompt
+# [ -r ~/.byobu/prompt ] && . ~/.byobu/prompt
+
+export SMTP_USER=`cat ~/.ssh/smtp_user`
+export SMTP_PASS=`cat ~/.ssh/smtp_pass`
+
+export VISUAL=vim
+export EDITOR=vim
+
+export GOPATH=~/vobs/gocode
+export AWS_REGION=us-west-2
+
+#export LANG=C
+
+alias aa='. choose_adb.sh'
+alias reboot='reboot.sh'
+alias mk='rm -f $OUT/ramdisk.img && m -j 16 bootimage'
+alias cerbero='~/vobs/cerbero/cerbero-uninstalled'
+
+repo ()
+{
+    if [[ "$1" = "sync" ]]; then
+        if [[ "$*" != *" -c"* ]]; then
+            echo "Sync without -c; aborting.";
+            return 1;
+        fi;
+    fi;
+    command repo "$@"
+}

@@ -1,0 +1,93 @@
+# Install
+# mkdir -p ~/.config/git
+# ln -s ~/vobs/github/eggonlea/tools/bak/gitignore_global ~/.config/git/ignore
+
+# Index
+tags
+.gitignore
+
+# Flutter
+.flutter-plugins
+.metadata
+
+# Python
+__pycache__
+
+# Qualcomm build system garbage
+chi-cdk/cdk/generated
+chi-cdk/vendor/tuning
+chi-cdk/vendor/chioverride
+prebuilt_HY11/Android.bp
+
+#built application files
+*.apk
+*.ap_
+
+# files for the dex VM
+*.dex
+
+# Java class files
+*.class
+
+# generated files
+bin/
+gen/
+*.out/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Windows thumbnail db
+Thumbs.db
+
+# OSX files
+.DS_Store
+
+# Android Studio / Intellij / etc.
+*.iml
+.idea
+#.idea/workspace.xml - remove # and delete .idea if it better suit your needs.
+.classpath
+.cxx
+.gradle
+.navigation
+.project
+build/
+captures/
+output.json
+
+# NDK
+obj/
+.externalNativeBuild
+externalNativeBuild
+
+# Simpleperf
+binary_cache/
+perf.data
+pprof.profile
+report.html
+
+# Trace
+trace.pftrace
+
+# Ruby
+.bundle
+.gem
+.rvm
+
+# Google Drive
+drivefs/
+
+# Others
+.atest/
+.audacity-data/
+.cups/
+.lesshst
+.lldb/
+.qjoypad3/
+.stepmania-5.1/
+.thunderbird/
+.python_history
+.vim
+tmp/
+mnt/

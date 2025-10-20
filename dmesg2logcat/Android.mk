@@ -1,0 +1,12 @@
+LOCAL_PATH := $(call my-dir)
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := dmesg2logcat
+LOCAL_SRC_FILES += dmesg2logcat.c
+LOCAL_MULTILIB := both
+LOCAL_MODULE_STEM_32 := $(LOCAL_MODULE)32
+LOCAL_MODULE_STEM_64 := $(LOCAL_MODULE)64
+LOCAL_LDLIBS := -llog
+
+include $(BUILD_EXECUTABLE)

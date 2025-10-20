@@ -1,0 +1,28 @@
+LOCAL_PATH := $(call my-dir)
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := cpu_latency
+
+LOCAL_SRC_FILES += cpu_latency.cpp
+LOCAL_LDLIBS := -lutils -lcutils
+
+LOCAL_MULTILIB := both
+LOCAL_MODULE_STEM_32 := $(LOCAL_MODULE)32
+LOCAL_MODULE_STEM_64 := $(LOCAL_MODULE)64
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := cpu_latency_atrace
+
+LOCAL_SRC_FILES += cpu_latency.cpp
+LOCAL_CFLAGS := -DENABLE_ATRACE_INFO
+LOCAL_LDLIBS := -lutils -lcutils
+
+LOCAL_MULTILIB := both
+LOCAL_MODULE_STEM_32 := $(LOCAL_MODULE)32
+LOCAL_MODULE_STEM_64 := $(LOCAL_MODULE)64
+
+include $(BUILD_EXECUTABLE)
