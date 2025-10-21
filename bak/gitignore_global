@@ -68,7 +68,7 @@ pprof.profile
 report.html
 
 # Trace
-trace.pftrace
+.pftrace
 
 # Ruby
 .bundle
