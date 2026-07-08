@@ -19,6 +19,9 @@ export EDITOR=vim
 export GOPATH=~/vobs/gocode
 export AWS_REGION=us-west-2
 
+# KVM/QEMU uses system instead of user session
+export LIBVIRT_DEFAULT_URI='qemu:///system'
+
 #export LANG=C
 
 alias aa='. choose_adb.sh'
