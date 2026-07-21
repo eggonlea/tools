@@ -1,3 +1,5 @@
+#!bin/bash
+
 adbroot.sh
 
 rm -f /tmp/block.dump

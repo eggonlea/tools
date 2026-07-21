@@ -1,3 +1,5 @@
+#!bin/bash
+
 set -x
 
 # godir external/chromium-trace

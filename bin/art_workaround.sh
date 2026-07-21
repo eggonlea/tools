@@ -1,3 +1,5 @@
+#!bin/bash
+
 adb remount
 adb pull /system/build.prop /tmp/build.prop
 sed -i -e 's/dalvik.vm.image-dex2oat-flags=--compiler-filter=verify-none//g' /tmp/build.prop

@@ -1,3 +1,5 @@
+#!bin/bash
+
 set -x
 
 adb wait-for-device

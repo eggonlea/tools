@@ -1,3 +1,5 @@
+#!bin/bash
+
 set -x
 while [ 1 ]
 do

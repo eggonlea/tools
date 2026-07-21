@@ -1,4 +1,5 @@
 #! /bin/sh
+
 # Transpose a matrix: assumes all lines have same number
 # of fields
 

@@ -1,3 +1,5 @@
+#!bin/bash
+
 adbroot.sh
 
 set -x

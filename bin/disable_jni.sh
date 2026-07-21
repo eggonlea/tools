@@ -1,3 +1,5 @@
+#!bin/bash
+
 adb remount
 adb pull /system/build.prop /tmp/build.prop
 sed -i -e 's/ro.kernel.android.checkjni=1//g' /tmp/build.prop

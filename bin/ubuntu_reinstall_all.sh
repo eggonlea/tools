@@ -1,3 +1,5 @@
+#!bin/bash
+
 # mkdir -p ~/vobs/github/eggonlea
 # cd ~/vobs/github/eggonlea
 # git clone git@github.com:eggonlea/tools.git

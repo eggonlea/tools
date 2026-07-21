@@ -1,3 +1,5 @@
+#!bin/bash
+
 set -x
 adbroot.sh
 for i in $(seq 0 7)

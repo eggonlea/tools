@@ -1,3 +1,5 @@
+#!bin/bash
+
 set -x
 
 # echo "sudo ip route add 139.9.131.65 via 100.69.96.1 dev wlp0s20f3 table main"

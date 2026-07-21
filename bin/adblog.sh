@@ -1,3 +1,5 @@
+#!bin/bash
+
 #adb logcat -b all "$@"
 #exit
 

@@ -1,3 +1,5 @@
+#!bin/bash
+
 adb shell "rm /sdcard/ftrace.log"
 adb shell "echo nop > /sys/kernel/debug/tracing/current_tracer"
 adb shell "echo 10240 > /sys/kernel/debug/tracing/buffer_size_kb"
