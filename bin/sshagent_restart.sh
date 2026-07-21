@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 ssh-agent -k
 mkdir -p ${SSH_AUTH_SOCK%/*}

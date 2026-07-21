@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 SHELL=/bin/sh
 PATH=/home/li/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin

@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 set -x
 BLANK=${1:-1}

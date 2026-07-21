@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 adb remount
 adb pull /system/build.prop /tmp/build.prop

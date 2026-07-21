@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 adb shell "rm /sdcard/ftrace.log"
 adb shell "echo '##### Before tracing_off' > /sys/kernel/debug/tracing/trace_marker"

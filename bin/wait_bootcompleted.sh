@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 #adb wait-for-device
 echo "Waiting for BOOT_COMPLETED"

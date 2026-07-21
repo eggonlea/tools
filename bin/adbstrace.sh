@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 trap 'echo Ctrl-C detected; exit' INT
 trap 'echo TERM detected; if [ $# -eq 1 ]; then adb pull /data/strace.log; fi; exit' TERM

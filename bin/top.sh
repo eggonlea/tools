@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 ID=${1:-0}
 adb pull /proc/stat /tmp/procstat.$ID > /dev/null 2> /dev/null

@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 #sudo sysctl net.ipv4.ip_forward=1
 sudo iptables -t nat -I POSTROUTING -s 192.168.0.2 -o eth0 -j MASQUERADE

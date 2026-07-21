@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 apt-get install -y parallel sox libsox-fmt-mp3
 

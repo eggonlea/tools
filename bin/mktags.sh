@@ -1,4 +1,4 @@
-#!bin/bash
+#!/bin/bash
 
 KERNEL_SRC=$PWD
 cd $TOP

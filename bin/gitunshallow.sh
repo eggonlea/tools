@@ -1,3 +1,3 @@
-#!bin/bash
+#!/bin/bash
 
 git fetch --no-tags --unshallow origin
