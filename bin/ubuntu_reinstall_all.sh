@@ -32,7 +32,7 @@ ln -s $BAK_DIR/gitignore_global ~/.config/git/ignore
 sudo ln -s $BAK_DIR/51-android.rules /etc/udev/rules.d/
 
 # general apps
-sudo apt install meld vim byobu fcitx-pinyin fcitx fcitx-googlepinyin git-core repo
+sudo apt install meld vim byobu fcitx-pinyin fcitx fcitx-googlepinyin git-core repo git-lfs
 
 # Android dev apps
 sudo apt-get install git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig
