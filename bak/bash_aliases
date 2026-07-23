@@ -39,3 +39,22 @@ repo ()
     fi;
     command repo "$@"
 }
+
+export PROXY_IP=10.123.206.155
+export PROXY_PORT=3128
+
+proxy_on() {
+	export proxy=http://${PROXY_IP}:${PROXY_PORT}
+	export http_proxy=http://${PROXY_IP}:${PROXY_PORT}
+	export https_proxy=http://${PROXY_IP}:${PROXY_PORT}
+	export no_proxy='localhost,127.0.0.*,10.*,100.*,*.huawei.com'
+	echo -e "Proxy ON"
+}
+
+proxy_off() {
+	unset http_proxy https_proxy
+	echo -e "Proxy OFF"
+}
+
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+
