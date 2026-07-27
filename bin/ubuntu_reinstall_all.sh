@@ -32,7 +32,7 @@ ln -s $BAK_DIR/gitignore_global ~/.config/git/ignore
 sudo ln -s $BAK_DIR/51-android.rules /etc/udev/rules.d/
 
 # general apps
-sudo apt install meld vim byobu git-core repo git-lfs net-tools iotop htop fcitx5 fcitx5-chinese-addons gnome-browser-connector ssh
+sudo apt install meld vim byobu git-core repo git-lfs net-tools iotop htop fcitx5 fcitx5-chinese-addons gnome-browser-connector ssh file
 
 # Android dev apps
 sudo apt install git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig
